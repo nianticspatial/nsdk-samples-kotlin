@@ -78,6 +78,9 @@ fun ObjectDetectionView(
         lifecycleOwner.lifecycle.addObserver(objectDetectionManager)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(objectDetectionManager)
+            if (objectDetectionManager.detectionStarted) {
+                objectDetectionManager.stopDetection()
+            }
         }
     }
 

@@ -91,6 +91,9 @@ fun MeshingView(context: Context, nsdkSession: NSDKSession, helpContentState: Mu
         lifecycleOwner.lifecycle.addObserver(meshingManager)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(meshingManager)
+            if (meshingManager.meshingStarted) {
+                meshingManager.stopMeshing()
+            }
             rootAnchorNode?.let { node ->
                 node.clearChildNodes()
             }
