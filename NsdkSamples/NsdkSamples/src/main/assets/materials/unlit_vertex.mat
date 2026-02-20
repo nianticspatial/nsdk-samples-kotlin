@@ -1,0 +1,35 @@
+// Unlit, vertex color material
+material {
+    name : unlit_vertex,
+
+    parameters : [
+        {
+            type : float4,
+            name : baseColor
+        }
+    ],
+
+    // Lists the required vertex attributes
+    // Here we only need a color (RGBA)
+    requires : [
+        color
+    ],
+
+    // This material disables all lighting
+    shadingModel : unlit,
+    blending : transparent,
+    depthWrite : true,
+    depthCulling : true,
+    featureLevel : 0
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        // You must always call the prepareMaterial() function
+        prepareMaterial(material);
+
+        // We set the material's color to the color interpolated from
+        // the model's vertices
+        material.baseColor = getColor();
+    }
+}

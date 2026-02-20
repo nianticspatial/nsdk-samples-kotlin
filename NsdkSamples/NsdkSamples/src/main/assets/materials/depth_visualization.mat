@@ -1,0 +1,57 @@
+material {
+    name : "DepthVisualization",
+    shadingModel : unlit,
+    blending : transparent,
+    parameters : [
+        { type : sampler2d, name : s_Texture },
+        { type : float, name : u_Alpha },
+        { type : float, name : _MinDistance },
+        { type : float, name : _MaxDistance },
+        { type : mat3, name : u_UvTransform }
+    ],
+    requires : [
+        color,
+        uv0
+    ]
+}
+
+fragment {
+    // HSV → RGB helper function
+    vec3 hsvToRgb(vec3 c) {
+        vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+        vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+        return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        // Get base UV coordinates
+        vec2 baseUV = getUV0();
+
+        // Apply homogeneous UV transformation for reprojection
+        // Convert to homogeneous coordinates and apply 3x3 transform matrix
+        vec3 uvh = vec3(baseUV.x, baseUV.y, 1.0);
+        vec3 transformedUvh = uvh * materialParams.u_UvTransform;
+
+        // Convert back from homogeneous coordinates (perspective divide)
+        vec2 uv = transformedUvh.xy / transformedUvh.z;
+
+        // Sample depth (CLAMP_TO_EDGE on sampler handles edge cases)
+        // Note: Filament uses underscores for sampler2d parameter access
+        float depth = texture(materialParams_s_Texture, uv).r;
+
+        // Normalize depth
+        float lerpFactor = (depth - materialParams._MinDistance) / (materialParams._MaxDistance - materialParams._MinDistance);
+        lerpFactor = clamp(lerpFactor, 0.0, 1.0);
+
+        // Hue mapping (green→red spectrum)
+        float hue = mix(0.70, -0.15, lerpFactor);
+        if (hue < 0.0) hue += 1.0;
+
+        vec3 hsv = vec3(hue, 0.9, 0.6);
+        vec3 color = hsvToRgb(hsv);
+
+        material.baseColor = vec4(color, materialParams.u_Alpha);
+    }
+}
