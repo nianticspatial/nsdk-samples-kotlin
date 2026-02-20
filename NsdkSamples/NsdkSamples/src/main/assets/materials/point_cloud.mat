@@ -1,0 +1,33 @@
+material {
+    name : "PointCloud",
+    shadingModel : unlit,
+    // vertexDomain defaults to 'object'
+    parameters : [
+        {
+            type : float,
+            name : pointSize,
+            default : 10.0
+        }
+    ],
+    requires : [
+        color
+    ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        gl_PointSize = materialParams.pointSize;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = getColor();
+
+        vec2 center = gl_PointCoord - vec2(0.5);
+        if (dot(center, center) > 0.25) {
+           discard;
+        }
+    }
+}
