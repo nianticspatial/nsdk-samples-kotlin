@@ -1,0 +1,61 @@
+material {
+    name : "CaptureVisualization",
+    shadingModel : unlit,
+    blending : transparent,
+    depthWrite : false,
+    depthCulling : false,
+    parameters : [
+        {
+            type : sampler2d,
+            name : visualizationTexture
+        },
+        {
+            type : int,
+            name : stripeStride
+        },
+        {
+            type : int,
+            name : stripeRedPixels
+        }
+    ],
+    requires : [
+        uv0
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        vec2 uv = getUV0();
+
+        // Sample the raycast texture (RGB = color, A = scanned/unscanned)
+        vec4 raycastColor = texture(materialParams_visualizationTexture, uv);
+
+        vec3 color = raycastColor.rgb;
+        float raycastAlpha = raycastColor.a;
+
+        // Generate diagonal stripe pattern for unscanned areas
+        // Get texture dimensions and pixel coordinates
+        ivec2 texSize = textureSize(materialParams_visualizationTexture, 0);
+        ivec2 pixelCoord = ivec2(uv * vec2(texSize));
+
+        // Diagonal stripes: (x + height - y) creates diagonal lines
+        // Use bitwise AND for stripe repeat pattern (matching Metal implementation)
+        int stripeCoord = (pixelCoord.x + texSize.y - pixelCoord.y) & materialParams.stripeStride;
+
+        // Determine stripe color: red or white
+        vec3 stripeColor;
+        if (stripeCoord < materialParams.stripeRedPixels) {
+            stripeColor = vec3(0.9, 0.0, 0.18);  // Red stripe
+        } else {
+            stripeColor = vec3(1.0, 1.0, 1.0);   // White stripe
+        }
+
+        // Blend raycast color with stripe pattern based on raycast alpha
+        // raycastAlpha = 1 means fully scanned (show raycast color)
+        // raycastAlpha = 0 means unscanned (show stripe pattern)
+        color = color * raycastAlpha + stripeColor * (1.0 - raycastAlpha);
+
+        material.baseColor = vec4(color, 1.0);
+    }
+}
