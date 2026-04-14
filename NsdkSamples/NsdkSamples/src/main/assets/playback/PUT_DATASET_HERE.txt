@@ -1,0 +1,8 @@
+Drop playback dataset folders here.
+
+Each dataset should be a folder containing the recorded session files.
+The folder name is used as the dataset path in NSDKDemoView.kt:
+
+    val playbackDatasetPath = "playback/<your-dataset-folder-name>"
+
+Dataset folders are excluded from version control (.gitignore).

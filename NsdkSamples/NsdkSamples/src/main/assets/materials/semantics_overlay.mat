@@ -1,5 +1,5 @@
 material {
-    name : "SemanticsOverlay",
+    name : "SceneSegmentationOverlay",
     shadingModel : unlit,
     blending : transparent,
     doubleSided : true,

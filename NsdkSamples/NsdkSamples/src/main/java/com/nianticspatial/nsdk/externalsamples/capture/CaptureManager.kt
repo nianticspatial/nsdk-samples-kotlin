@@ -1,4 +1,4 @@
-// Copyright 2025 Niantic.
+// Copyright 2026 Niantic Spatial.
 package com.nianticspatial.nsdk.externalsamples.capture
 
 import android.util.Log
@@ -154,7 +154,8 @@ class CaptureManager(
                 recordingExporter.export(
                     basePath,
                     scanId,
-                    onProgress = { p -> exportProgress = p })) {
+                    onProgress = { p -> exportProgress = p },
+                    timeoutMillis = 600000)) {
                 is AsyncResult.Success -> {
                     Log.i("CaptureManager", "Export completed: ${result.value}")
                     Result.success(result.value)

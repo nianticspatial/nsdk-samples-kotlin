@@ -1,3 +1,4 @@
+// Copyright 2026 Niantic Spatial.
 package com.nianticspatial.nsdk.externalsamples.scenesegmentation
 
 import android.graphics.Matrix
@@ -8,9 +9,9 @@ import com.google.android.filament.Engine
 import com.google.android.filament.MaterialInstance
 import com.google.android.filament.Texture
 import com.google.android.filament.TextureSampler
-import com.google.ar.core.Frame
 import com.nianticspatial.nsdk.Image
-import com.nianticspatial.nsdk.awareness.semantics.SemanticsResult
+import com.nianticspatial.nsdk.NsdkFrame
+import com.nianticspatial.nsdk.awareness.scenesegmentation.SceneSegmentationResult
 import com.nianticspatial.nsdk.utils.ImageMath
 import com.nianticspatial.nsdk.externalsamples.NSDKSessionManager
 import com.nianticspatial.nsdk.externalsamples.common.OverlayContent
@@ -41,7 +42,7 @@ class SceneSegmentationOverlayContent(
     private val targetView: FloatArray = FloatArray(16)
 
     companion object {
-        private const val TAG = "SemanticsOverlayContent"
+        private const val TAG = "SceneSegmentationOverlayContent"
     }
 
     override fun onCreateMaterial(engine: Engine, materialLoader: MaterialLoader): MaterialInstance {
@@ -132,22 +133,22 @@ class SceneSegmentationOverlayContent(
     }
 
     private fun updateUvTransform(
-        semanticsResult: SemanticsResult,
-        arFrame: Frame,
+        sceneSegmentationResult: SceneSegmentationResult,
+        arFrame: NsdkFrame,
         materialInstance: MaterialInstance
     ) {
         try {
             val currentViewportSize = viewportSize ?: return
 
-            val imageSize = semanticsResult.intrinsics.getImageDimensions()
+            val imageSize = sceneSegmentationResult.intrinsics.getImageDimensions()
 
             val display = ImageMath.displayTransform(
-                orientation = nsdkSessionManager.arManager.lastImageOrientation,
+                orientation = nsdkSessionManager.currentImageOrientation,
                 viewportSize = currentViewportSize,
                 imageSize = Size(imageSize[0], imageSize[1])
             ) * ImageMath.affineInvertVertical()
 
-            val reprojection = calculateReprojection(semanticsResult, arFrame)
+            val reprojection = calculateReprojection(sceneSegmentationResult, arFrame)
 
             val uvTransform = Matrix()
             (display * reprojection).invert(uvTransform)
@@ -168,19 +169,19 @@ class SceneSegmentationOverlayContent(
     }
 
     /**
-     * Calculate reprojection matrix from semantics result pose to current AR frame.
+     * Calculate reprojection matrix from Scene Segmentation result pose to current AR frame.
      */
     private fun calculateReprojection(
-        semanticsResult: SemanticsResult,
-        arFrame: Frame
+        sceneSegmentationResult: SceneSegmentationResult,
+        arFrame: NsdkFrame
     ): Matrix {
-        val reference = semanticsResult.pose.inverse()
+        val reference = sceneSegmentationResult.pose.inverse()
         val target = arFrame.camera.pose.inverse()
         reference.toMatrix(referenceView, 0)
         target.toMatrix(targetView, 0)
 
-        val imageSize = semanticsResult.intrinsics.getImageDimensions()
-        val focalLengthY = semanticsResult.intrinsics.getFocalLength()[1] // fy
+        val imageSize = sceneSegmentationResult.intrinsics.getImageDimensions()
+        val focalLengthY = sceneSegmentationResult.intrinsics.getFocalLength()[1] // fy
 
         return ImageMath.reprojection(
             aspect = imageSize[0].toFloat() / imageSize[1].toFloat(),

@@ -1,4 +1,4 @@
-// Copyright 2025 Niantic.
+// Copyright 2026 Niantic Spatial.
 package com.nianticspatial.nsdk.externalsamples.common
 
 import android.content.Context
@@ -45,19 +45,19 @@ import java.nio.ByteOrder
  *
  * @param content The content provider that supplies materials and textures.
  */
-class ScreenOverlayView @JvmOverloads constructor(
+class ScreenOverlayView constructor(
     context: Context,
     private val content: OverlayContent,
+    private val engine: Engine,
+    private val materialLoader: MaterialLoader,
     attrs: AttributeSet? = null,
     defStyleAttr: Int = 0
 ) : TextureView(context, attrs, defStyleAttr), Choreographer.FrameCallback, TextureView.SurfaceTextureListener {
 
-    private val engine: Engine
     private val renderer: Renderer
     private val scene: Scene
     private val view: View
     private val camera: Camera
-    private val materialLoader: MaterialLoader
 
     private var swapChain: SwapChain? = null
     private var nativeSurface: Surface? = null
@@ -78,9 +78,6 @@ class ScreenOverlayView @JvmOverloads constructor(
         isFocusable = false
         isFocusableInTouchMode = false
         setOnTouchListener { _, _ -> false }
-
-        engine = Engine.create()
-        materialLoader = MaterialLoader(engine, context)
 
         renderer = engine.createRenderer()
         scene = engine.createScene()
@@ -290,9 +287,6 @@ class ScreenOverlayView @JvmOverloads constructor(
         engine.safeDestroyRenderer(renderer)
         engine.safeDestroyView(view)
         engine.safeDestroyScene(scene)
-
-        materialLoader.destroy()
-        engine.destroy()
     }
 
     // TextureView.SurfaceTextureListener implementation

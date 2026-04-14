@@ -1,9 +1,9 @@
-// Copyright 2025 Niantic.
+// Copyright 2026 Niantic Spatial.
 
 package com.nianticspatial.nsdk.externalsamples
 
-import com.google.ar.core.Frame
+import com.nianticspatial.nsdk.NsdkFrame
 
 interface OnFrameUpdateListener {
-    fun onFrameUpdate(frame: Frame)
+    fun onFrameUpdate(frame: NsdkFrame)
 }

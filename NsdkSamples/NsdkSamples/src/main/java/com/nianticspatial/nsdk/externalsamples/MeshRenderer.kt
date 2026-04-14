@@ -1,3 +1,4 @@
+// Copyright 2026 Niantic Spatial.
 package com.nianticspatial.nsdk.externalsamples
 
 import android.content.Context
@@ -7,6 +8,7 @@ import androidx.compose.ui.graphics.Color
 import com.google.android.filament.Box
 import com.google.android.filament.Engine
 import com.google.android.filament.IndexBuffer
+import com.google.android.filament.Material
 import com.google.android.filament.MaterialInstance
 import com.google.android.filament.RenderableManager
 import com.google.android.filament.Texture
@@ -48,6 +50,8 @@ class MeshRenderer(
 
     private var _defaultMaterialColor: Color = Color.Companion.White
 
+    private var _unlitVertexMaterial: Material? = null
+
     // Containers for all mesh chunk data
     private var newMeshChunks = ConcurrentHashMap<Long, RenderableMeshChunk>()
     private var meshNodesToRemove = mutableListOf<Long>()
@@ -56,6 +60,12 @@ class MeshRenderer(
     // Flag for reloading all chunks, mostly for if we receive a new mesh
     private var _needsMeshProcessing = false
     val needsMeshProcessing: Boolean get() = _needsMeshProcessing
+
+    @Volatile private var isDestroyed = false
+
+    // MaterialInstances created via material.createInstance() are NOT tracked by MaterialLoader,
+    // so we must destroy them ourselves before MaterialLoader tears down the parent Material.
+    private val trackedMaterialInstances = mutableListOf<MaterialInstance>()
 
     // Get the new mesh chunks that need to be processed. some chunks might be new, others might just be getting updated, while others are being removed
     @Synchronized
@@ -81,11 +91,16 @@ class MeshRenderer(
      */
     @Synchronized
     fun createMeshNodes(context: Context, parentNode: PoseNode) {
+        if (isDestroyed) return
         // First delete any old chunks flagged for removal (even if no new chunks to add)
         meshNodesToRemove.forEach { chunkId ->
-            var poseNode = processedMeshNodes.remove(chunkId)
-            if (poseNode != null) {
-                parentNode.removeChildNode(poseNode)
+            val meshNode = processedMeshNodes.remove(chunkId)
+            if (meshNode != null) {
+                parentNode.removeChildNode(meshNode)
+                // Destroy the Filament renderable entity so its MaterialInstance can be
+                // safely destroyed later. removeChildNode only detaches from the scene
+                // graph; it does not free GPU resources.
+                meshNode.destroy()
             }
         }
         meshNodesToRemove.clear()
@@ -363,7 +378,31 @@ class MeshRenderer(
     fun clearData() {
         newMeshChunks.clear()
         meshNodesToRemove.clear()
+        // Destroy each node's Filament renderable entity before clearing the map.
+        // Without this, the renderables remain alive and still reference their
+        // MaterialInstances; destroy() would then call destroyMaterialInstance()
+        // on MIs still in use → PreconditionPanic.
+        processedMeshNodes.values.forEach { it.destroy() }
         processedMeshNodes.clear()
+        _needsMeshProcessing = false
+    }
+
+    // Must be called before the Filament engine is torn down.
+    // Synchronized with createMeshNodes so it either runs before any in-progress
+    // mesh creation starts, or waits for it to finish before marking destroyed.
+    @Synchronized
+    fun destroy() {
+        isDestroyed = true
+        // Destroy MeshNodes first (removes entities; SceneView also destroys their VBs/IBs).
+        processedMeshNodes.values.forEach { it.destroy() }
+        processedMeshNodes.clear()
+        // Destroy MaterialInstances we own (created via material.createInstance(), not by
+        // MaterialLoader). Must happen before MaterialLoader destroys the parent Material,
+        // otherwise Filament panics with PreconditionPanic at material destruction.
+        trackedMaterialInstances.forEach { engine.destroyMaterialInstance(it) }
+        trackedMaterialInstances.clear()
+        newMeshChunks.clear()
+        meshNodesToRemove.clear()
         _needsMeshProcessing = false
     }
 
@@ -372,20 +411,15 @@ class MeshRenderer(
         materialLoader: MaterialLoader,
         color: Color
     ): MaterialInstance {
-        // Load the pre-compiled unlit material
-        val buffer = context.assets.open("materials/unlit_vertex.filamat").use {
-            ByteBuffer.wrap(it.readBytes())
+        if (_unlitVertexMaterial == null){
+            val buffer = context.assets.open("materials/unlit_vertex.filamat").use {
+                ByteBuffer.wrap(it.readBytes())
+            }
+            _unlitVertexMaterial = materialLoader.createMaterial(buffer)
         }
-
-        val material = materialLoader.createMaterial(buffer)
-        val materialInstance = material.createInstance()
-
-        // Set the base color parameter (RGBA as individual floats)
-        materialInstance.setParameter(
-            "baseColor",
-            color.red, color.green, color.blue, color.alpha
-        )
-
+        val materialInstance = _unlitVertexMaterial!!.createInstance()
+        materialInstance.setParameter("baseColor", color.red, color.green, color.blue, color.alpha)
+        trackedMaterialInstances.add(materialInstance)
         return materialInstance
     }
 }

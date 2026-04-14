@@ -1,4 +1,4 @@
-// Copyright 2026 Niantic.
+// Copyright 2026 Niantic Spatial.
 package com.nianticspatial.nsdk.externalsamples.vps2
 
 import android.content.Context
@@ -43,7 +43,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.gestures.detectTapGestures
 import com.nianticspatial.nsdk.AnchorTrackingState
 import com.nianticspatial.nsdk.UUIDKey
 import com.nianticspatial.nsdk.externalsamples.BuildConfig
@@ -55,7 +57,7 @@ import com.nianticspatial.nsdk.externalsamples.LocalSceneMaterialLoader
 import com.nianticspatial.nsdk.externalsamples.arChildNodes
 import com.nianticspatial.nsdk.externalsamples.createUnlitColorMaterial
 import com.nianticspatial.nsdk.externalsamples.destroyRecursively
-import com.nianticspatial.nsdk.vps2.VPS2TrackingState
+import com.nianticspatial.nsdk.vps2.Vps2TrackingState
 import dev.romainguy.kotlin.math.Float3
 import dev.romainguy.kotlin.math.Float4
 import dev.romainguy.kotlin.math.Mat4
@@ -64,6 +66,7 @@ import io.github.sceneview.node.CubeNode
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.delay
 import java.util.Locale
+import com.nianticspatial.nsdk.GeolocationData
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -71,7 +74,7 @@ fun VPS2View(
     context: Context,
     nsdkManager: NSDKSessionManager,
     helpContentState: MutableState<HelpContent?>,
-    initialPayload: String? = null
+    initialPayload: String?
 ) {
     val engine = LocalSceneEngine.current
     val materialLoader = LocalSceneMaterialLoader.current
@@ -106,8 +109,8 @@ fun VPS2View(
     DisposableEffect(lifecycleOwner, vps2Manager) {
         lifecycleOwner.lifecycle.addObserver(vps2Manager)
         onDispose {
-            vps2Manager.stopTracking()
             lifecycleOwner.lifecycle.removeObserver(vps2Manager)
+            vps2Manager.onDestroy(lifecycleOwner)
         }
     }
 
@@ -299,7 +302,14 @@ fun VPS2View(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier
+        .fillMaxSize()
+        .pointerInput(vps2Manager) {
+            detectTapGestures {
+                vps2Manager.createAnchor()
+            }
+        }
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -312,7 +322,7 @@ fun VPS2View(
             if (!vps2Manager.trackingStarted && !initialPayload.isNullOrBlank()) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Anchor payload found via VPS Coverage",
+                    text = "Anchor payload obtained from Site",
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(Color.DarkGray.copy(alpha = 0.5f))
@@ -349,29 +359,45 @@ fun VPS2View(
                             AnchorTrackingState.LIMITED -> Color.Yellow
                             AnchorTrackingState.NOT_TRACKED -> Color.Red
                         }
-                        Row(
-                            modifier = Modifier.padding(vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(stateColor)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "$anchorName - $state",
-                                color = Color.White,
-                                fontSize = 9.sp
-                            )
+                        val geo: GeolocationData? = vps2Manager.anchorGeolocations[anchorKey]
+                        Column(modifier = Modifier.padding(vertical = 2.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(stateColor)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "$anchorName - $state",
+                                    color = Color.White,
+                                    fontSize = 9.sp
+                                )
+                            }
+                            if (geo != null) {
+                                Text(
+                                    text = String.format(
+                                        Locale.US,
+                                        "  %.5f, %.5f, %.1f°",
+                                        geo.latitude,
+                                        geo.longitude,
+                                        geo.heading
+                                    ),
+                                    color = Color.LightGray,
+                                    fontSize = 8.sp,
+                                    modifier = Modifier.padding(start = 14.dp)
+                                )
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Compass like WPS sample, plus lat/lng from latest transformer conversion (bottom-end)
+        // Compass like WPS sample, plus lat/lng from latest localization conversion (bottom-end)
         if (vps2Manager.trackingStarted) {
             Column(
                 modifier = Modifier
@@ -430,14 +456,14 @@ fun VPS2View(
             }
         }
 
-        // Localization quality indicator circle is tied to the transformer tracking state:
+        // Localization quality indicator circle is tied to the localization tracking state:
         // - UNAVAILABLE -> Red
         // - COARSE -> Yellow
         // - PRECISE -> Green
-        val indicatorColor = when (vps2Manager.transformerTrackingState) {
-            VPS2TrackingState.UNAVAILABLE -> Color.Red
-            VPS2TrackingState.COARSE -> Color.Yellow
-            VPS2TrackingState.PRECISE -> Color.Green
+        val indicatorColor = when (vps2Manager.localizationTrackingState) {
+            Vps2TrackingState.UNAVAILABLE -> Color.Red
+            Vps2TrackingState.COARSE -> Color.Yellow
+            Vps2TrackingState.PRECISE -> Color.Green
         }
 
         Box(
