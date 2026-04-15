@@ -1,4 +1,4 @@
-// Copyright 2025 Niantic.
+// Copyright 2026 Niantic Spatial.
 package com.nianticspatial.nsdk.externalsamples.capture
 
 import android.app.Activity
@@ -84,8 +84,6 @@ fun CaptureView(
         onDispose {
             captureManager.onDestroy(lifecycleOwner)
             lifecycleOwner.lifecycle.removeObserver(captureManager)
-            // Stop capture and cleanup when the composable is disposed
-            captureManager.stop()
         }
     }
 

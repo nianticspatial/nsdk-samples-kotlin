@@ -1,4 +1,4 @@
-// Copyright 2025 Niantic.
+// Copyright 2026 Niantic Spatial.
 package com.nianticspatial.nsdk.externalsamples
 
 import androidx.compose.foundation.Image
@@ -17,24 +17,25 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.nianticspatial.nsdk.NSDKSession
-import com.nianticspatial.nsdk.externalsamples.objectdetection.ObjectDetectionRoute
 import com.nianticspatial.nsdk.externalsamples.capture.CaptureRoute
 import com.nianticspatial.nsdk.externalsamples.depth.DepthRoute
 import com.nianticspatial.nsdk.externalsamples.vps2.VPS2Route
-import com.nianticspatial.nsdk.externalsamples.wps.WpsRoute
 import com.nianticspatial.nsdk.externalsamples.meshing.MeshingRoute
 import com.nianticspatial.nsdk.externalsamples.scenesegmentation.SceneSegmentationRoute
 import com.nianticspatial.nsdk.externalsamples.mapping.DeviceMappingRoute
 import com.nianticspatial.nsdk.externalsamples.sites.SitesRoute
-import com.nianticspatial.nsdk.externalsamples.auth.AuthRoute
+import com.nianticspatial.nsdk.externalsamples.occlusion.OcclusionRoute
 import kotlinx.serialization.Serializable
 
 @Serializable
 object SelectorRoute
 
 @Composable
-fun SelectorView(navHostController: NavHostController, nsdkSession: NSDKSession) {
-
+fun SelectorView(
+    navHostController: NavHostController,
+    nsdkSession: NSDKSession,
+    topBarTrailingContent: (@Composable () -> Unit)? = null
+) {
     val buttonModifier = Modifier
         .fillMaxWidth()
         .padding(start = 16.dp, end = 16.dp)
@@ -56,17 +57,12 @@ fun SelectorView(navHostController: NavHostController, nsdkSession: NSDKSession)
                 modifier = buttonModifier
             ) { Text(text = "VPS2 (With sites)") }
             Button(
-                onClick = { navHostController.navigate(WpsRoute) },
-                modifier = buttonModifier
-            ) { Text(text = "WPS") }
-            Button(
-                onClick = { navHostController.navigate(ObjectDetectionRoute) },
-                modifier = buttonModifier
-            ) { Text(text = "Object Detection") }
-            Button(
                 onClick = { navHostController.navigate(DepthRoute) },
                 modifier = buttonModifier
             ) { Text(text = "Depth") }
+            Button(onClick = {navHostController.navigate(OcclusionRoute)},
+                modifier = buttonModifier
+            ) {Text(text = "Occlusion")}
             Button(
                 onClick = { navHostController.navigate(MeshingRoute) },
                 modifier = buttonModifier
@@ -84,14 +80,11 @@ fun SelectorView(navHostController: NavHostController, nsdkSession: NSDKSession)
                 modifier = buttonModifier
             ) { Text(text = "Device Mapping") }
             Button(
-                onClick = { navHostController.navigate(AuthRoute) },
-                modifier = buttonModifier
-            ) { Text(text = "Auth Management") }
-            Button(
                 onClick = { navHostController.navigate(VPS2Route()) },
                 modifier = buttonModifier
             ) { Text(text = "VPS2 (with anchor payload)") }
             Text(text = "NSDK v" + nsdkSession.getVersion())
         }
+        topBarTrailingContent?.invoke()
     }
 }

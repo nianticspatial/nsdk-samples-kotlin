@@ -1,4 +1,4 @@
-// Copyright 2026 Niantic.
+// Copyright 2026 Niantic Spatial.
 package com.nianticspatial.nsdk.externalsamples.vps2
 
 import kotlinx.serialization.Serializable

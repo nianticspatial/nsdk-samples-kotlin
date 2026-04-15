@@ -1,3 +1,4 @@
+// Copyright 2026 Niantic Spatial.
 package com.nianticspatial.nsdk.externalsamples
 
 import android.content.Intent
@@ -10,7 +11,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.ui.Modifier
 import com.nianticspatial.nsdk.externalsamples.auth.LoginManager
-import com.nianticspatial.nsdk.externalsamples.auth.UserSessionManager
+import com.nianticspatial.nsdk.externalsamples.auth.NSSampleSessionManager
+import com.nianticspatial.nsdk.externalsamples.auth.SharedPrefsTokenStorage
 import com.nianticspatial.nsdk.externalsamples.common.PermissionsView
 
 class MainActivity : ComponentActivity() {
@@ -19,7 +21,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        UserSessionManager.start(applicationContext)
+        NSSampleSessionManager.configure(SharedPrefsTokenStorage(this))
 
         loginManager = LoginManager(this)
 

@@ -1,4 +1,4 @@
-// Copyright 2025 Niantic.
+// Copyright 2026 Niantic Spatial.
 package com.nianticspatial.nsdk.externalsamples
 
 import androidx.lifecycle.DefaultLifecycleObserver

@@ -1,0 +1,43 @@
+material {
+    name : "CameraStreamDepthNsdk",
+    shadingModel : unlit,
+    blending : opaque,
+    vertexDomain : device,
+    culling : none,
+    requires : [
+        uv0
+    ],
+    parameters : [
+        { type : samplerExternal, name : cameraTexture     },
+        { type : float4x4,        name : uvTransform       },
+        { type : sampler2d,       name : depthTexture      },
+        { type : mat3,            name : depthUvTransform  }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        // Camera feed color
+        vec3 camColor = texture(materialParams_cameraTexture, getUV0()).rgb;
+        material.baseColor = vec4(inverseTonemapSRGB(camColor), 1.0);
+
+        // NSDK depth → gl_FragDepth
+        float w = getResolution().x;
+        float h = getResolution().y;
+        vec2 screenUV = vec2(gl_FragCoord.x / w, gl_FragCoord.y / h);
+        vec3 uvh = vec3(screenUV, 1.0);
+        vec3 transformedUvh = uvh * materialParams.depthUvTransform;
+        vec2 depthUV = transformedUvh.xy / transformedUvh.z;
+        float depth_m = texture(materialParams_depthTexture, depthUV).r;
+
+        // When nsdk depth first launches, it may take a moment for the depth data to become valid
+        // So in order to avoid nothing rendering (depth = 0, which would be mean total occlusion) we force depth to its
+        // maximum value. It is unlikely that an occluder will be at exactly 0.2m distance from the camera.
+        float d = (depth_m > 0.0) ? depth_m : 100.0;
+        vec4 clipPos = getClipFromViewMatrix() * vec4(0.0, 0.0, -d, 1.0);
+        gl_FragDepth = clipPos.z / clipPos.w;
+    }
+}
+

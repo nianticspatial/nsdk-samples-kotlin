@@ -1,3 +1,4 @@
+// Copyright 2026 Niantic Spatial.
 package com.nianticspatial.nsdk.externalsamples.auth
 
 import android.app.Activity
@@ -9,9 +10,13 @@ import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 
 /**
- * Handles opening the web-page for login into the Enterprise Auth sample
- * and receiving the results.
+ * Handles opening the web-page for login and receiving the results.
  *
+ * When login is requested, opens a URL in the browser which points to the login web portal.
+ * On success, a "deep link" is returned with tokens generated for the user session.
+ *
+ * If reusing this code outside the sample, it is recommended to change the redirectType in the URL
+ * to "nsdk-external"
  */
 class LoginManager(private val activity: Activity) {
 
@@ -31,7 +36,10 @@ class LoginManager(private val activity: Activity) {
      */
     fun startAuth() {
         // 1. The URL for the login page
-        val authURL = "${AuthConstants.EndPointUrls.SIGN_IN}?redirectType=ios-app".toUri()
+        // On success, the "nsdk-samples" redirectType returns a deep link with "nsdk-samples://..." scheme.
+        // NOTE: This can be replaced with "nsdk-external" if reusing this code (so as not to conflict).
+        // (AndroidManifest.xml will need to be updated to handle "nsdk-external" scheme).
+        val authURL = "${AuthConstants.EndPointUrls.SIGN_IN}?redirectType=nsdk-samples".toUri()
 
         // 2. Create CustomTabsIntent
         val customTabsIntent = CustomTabsIntent.Builder()
@@ -73,10 +81,6 @@ class LoginManager(private val activity: Activity) {
             return
         }
 
-        UserSessionManager.setUserSession(
-            context = activity.applicationContext,
-            refreshToken = tokens.second,
-            accessToken = tokens.first
-        )
+        NSSampleSessionManager.setNSSampleSession(sessionToken = tokens.second)
     }
 }

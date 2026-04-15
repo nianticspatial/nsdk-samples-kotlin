@@ -16,10 +16,8 @@ android {
         versionCode = 1
         versionName = "4.0.0"
 
-        buildConfigField("String", "API_KEY", "\"YOUR_API_KEY\"")
         buildConfigField("String", "DEFAULT_VPS_PAYLOAD", "\"YOUR_PAYLOAD\"")
         buildConfigField("String", "ACCESS_TOKEN", "\"\"")
-        buildConfigField("String", "REFRESH_TOKEN", "\"\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -74,7 +72,7 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.material3:material3:1.2.0-alpha13")
-    implementation(files("libs/generated/nsdk.aar"))
+    implementation("com.nianticspatial:nsdk:4.0.0.26041500")
     implementation(libs.androidx.fragment.ktx)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.camera2)
