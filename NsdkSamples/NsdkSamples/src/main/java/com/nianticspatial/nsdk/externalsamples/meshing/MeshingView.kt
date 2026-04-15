@@ -1,3 +1,4 @@
+// Copyright 2026 Niantic Spatial.
 package com.nianticspatial.nsdk.externalsamples.meshing
 
 import android.content.Context
@@ -44,6 +45,8 @@ import com.nianticspatial.nsdk.externalsamples.LocalSceneMaterialLoader
 import kotlinx.serialization.Serializable
 import com.nianticspatial.nsdk.externalsamples.MeshRenderer
 import com.nianticspatial.nsdk.externalsamples.addChildNode
+import com.nianticspatial.nsdk.externalsamples.arChildNodes
+import com.nianticspatial.nsdk.externalsamples.destroyRecursively
 import io.github.sceneview.ar.node.PoseNode
 
 @Serializable
@@ -90,13 +93,18 @@ fun MeshingView(context: Context, nsdkSession: NSDKSession, helpContentState: Mu
     DisposableEffect(lifecycleOwner) {
         lifecycleOwner.lifecycle.addObserver(meshingManager)
         onDispose {
+            // Cancel the render coroutine before any Filament teardown. This ensures
+            // no new createMeshNodes() calls can start. Any in-flight call is handled
+            // by meshRenderer.destroy() below, which is synchronized with it.
+            coroutineScope.cancel()
             lifecycleOwner.lifecycle.removeObserver(meshingManager)
-            if (meshingManager.meshingStarted) {
-                meshingManager.stopMeshing()
-            }
-            rootAnchorNode?.let { node ->
-                node.clearChildNodes()
-            }
+            meshingManager.onDestroy(lifecycleOwner)
+            // Destroys all MeshNodes (entities + VBs/IBs via SceneView) and all tracked
+            // MaterialInstances before MaterialLoader tears down the parent Material.
+            meshRenderer.destroy()
+            // Destroy the root anchor node itself. Children are already detached by
+            // meshRenderer.destroy(), so destroyRecursively just destroys the root entity.
+            rootAnchorNode?.destroyRecursively(arChildNodes)
         }
     }
 

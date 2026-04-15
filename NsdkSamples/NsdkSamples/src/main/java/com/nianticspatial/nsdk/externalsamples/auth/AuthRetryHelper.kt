@@ -1,4 +1,4 @@
-// Copyright Niantic Spatial.
+// Copyright 2026 Niantic Spatial.
 
 package com.nianticspatial.nsdk.externalsamples.auth
 

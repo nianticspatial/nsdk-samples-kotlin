@@ -1,4 +1,4 @@
-// Copyright 2025 Niantic.
+// Copyright 2026 Niantic Spatial.
 
 package com.nianticspatial.nsdk.externalsamples.mapping
 
@@ -60,7 +60,6 @@ import com.nianticspatial.nsdk.externalsamples.clearChildNodes
 import dev.romainguy.kotlin.math.Float4
 import dev.romainguy.kotlin.math.Mat4
 import io.github.sceneview.ar.node.PoseNode
-import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 import io.github.sceneview.safeDestroyMaterialInstance
 import java.nio.ByteBuffer
@@ -309,12 +308,14 @@ fun DeviceMappingView(context: Activity, nsdkSessionManager: NSDKSessionManager,
         mapsPendingVisualization = emptyList()
     }
 
-    lifecycleOwner.lifecycle.addObserver(mappingManager)
-
     DisposableEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.addObserver(mappingManager)
         mappingManager.setMapProcessingCallbacks(::processPendingMaps, ::processVpsMetadata)
 
         onDispose {
+            lifecycleOwner.lifecycle.removeObserver(mappingManager)
+            mappingManager.onDestroy(lifecycleOwner);
+
             // Clean up point cloud nodes first
             clearVisualization()
 
@@ -326,21 +327,12 @@ fun DeviceMappingView(context: Activity, nsdkSessionManager: NSDKSessionManager,
         }
     }
 
-    LaunchedEffect(mappingManager.isMapping) {
-        while (mappingManager.isMapping) {
-            mappingManager.processMapUpdates()
-            delay(1000)
-        }
-    }
-
     LaunchedEffect(Unit) {
         checkSavedMapAvailable()
+    }
 
-        while (true) {
-            mappingManager.processVpsUpdates()
-            updateVisualizationIfNeeded()
-            delay(100)
-        }
+    LaunchedEffect(mappingManager.currentAnchorUpdate) {
+        updateVisualizationIfNeeded()
     }
 
     Box(modifier = Modifier.fillMaxSize()) {

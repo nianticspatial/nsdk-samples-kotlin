@@ -1,3 +1,4 @@
+// Copyright 2026 Niantic Spatial.
 package com.nianticspatial.nsdk.externalsamples
 
 import androidx.compose.foundation.background

@@ -1,3 +1,4 @@
+// Copyright 2026 Niantic Spatial.
 package com.nianticspatial.nsdk.externalsamples.depth
 
 import androidx.compose.foundation.layout.Arrangement
@@ -40,7 +41,7 @@ fun DepthView(
     val lifecycleOwner = LocalLifecycleOwner.current
 
     val depthOverlayContent = remember {
-        DepthOverlayContent(depthManager, nsdkSessionManager.arManager)
+        DepthOverlayContent(depthManager, nsdkSessionManager)
     }
 
     // Register overlay content with ARSceneView

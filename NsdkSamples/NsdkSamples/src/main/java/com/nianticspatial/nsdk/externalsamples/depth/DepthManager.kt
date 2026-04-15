@@ -1,3 +1,4 @@
+// Copyright 2026 Niantic Spatial.
 package com.nianticspatial.nsdk.externalsamples.depth
 
 import android.util.Log
@@ -20,6 +21,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class DepthManager(
     private val session: DepthSession,
@@ -51,12 +53,20 @@ class DepthManager(
 
     override fun onDestroy(owner: LifecycleOwner) {
         super.onDestroy(owner)
-        stop()
-        try {
-            depthSession.close()
-            log("Closed depth session")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error closing depth session", e)
+        // Signal the poll loop to exit on its next while(isRunning) check.
+        val wasRunning = isRunning
+        isRunning = false
+        val jobSnapshot = pollJob
+        pollJob = null
+        CoroutineScope(Dispatchers.Default).launch {
+            jobSnapshot?.join()
+            if (wasRunning) depthSession.stop()
+            try {
+                depthSession.close()
+                withContext(Dispatchers.Main) { log("Closed depth session") }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error closing depth session", e)
+            }
         }
         coroutineScope.cancel()
     }
@@ -65,7 +75,7 @@ class DepthManager(
         if (isRunning) return
         val status = depthSession.start()
         isRunning = true
-        log("Started depth session")
+        log("Started depth session (native status=$status)")
 
         pollJob = coroutineScope.launch {
             var hasReceivedFirstFrame = false

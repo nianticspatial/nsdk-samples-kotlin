@@ -1,3 +1,4 @@
+// Copyright 2026 Niantic Spatial.
 package com.nianticspatial.nsdk.externalsamples.scenesegmentation
 
 import android.annotation.SuppressLint
@@ -59,9 +60,9 @@ fun SceneSegmentationView(
     DisposableEffect(Unit) {
         helpContentState.value = {
             Text(
-                text = "Semantics Sample Help\n\nThis sample runs semantic segmentation and " +
+                text = "Scene Segmentation Sample Help\n\nThis sample runs Scene Segmentation and " +
                     "visualizes the confidence map with a pink/blue gradient.\nTO USE:\n" +
-                    "Pick a semantic class from the dropdown, adjust the transparency slider, " +
+                    "Pick a Scene Segmentation class from the dropdown, adjust the transparency slider, " +
                     "and toggle the overlay visibility as needed.",
                 color = Color.White
             )
@@ -83,7 +84,7 @@ fun SceneSegmentationView(
         lifecycleOwner.lifecycle.addObserver(sceneSegmentationManager)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(sceneSegmentationManager)
-            sceneSegmentationManager.stop()
+            sceneSegmentationManager.onDestroy(lifecycleOwner)
         }
     }
 
@@ -91,11 +92,11 @@ fun SceneSegmentationView(
         sceneSegmentationManager.start()
     }
 
-    var latestWarning by remember { mutableStateOf<SemanticsWarningEvent?>(null) }
+    var latestWarning by remember { mutableStateOf<SceneSegmentationWarningEvent?>(null) }
     LaunchedEffect(sceneSegmentationManager) {
         sceneSegmentationManager.warnings.collect { event ->
             latestWarning =
-                if (event == SemanticsWarningEvent.Cleared) null else event
+                if (event == SceneSegmentationWarningEvent.Cleared) null else event
         }
     }
 
@@ -145,7 +146,7 @@ fun SceneSegmentationView(
                         onValueChange = {},
                         readOnly = true,
                         enabled = channels.isNotEmpty(),
-                        label = { Text("Semantic Channel") },
+                        label = { Text("Scene Segmentation Channel") },
                         trailingIcon = {
                             ExposedDropdownMenuDefaults.TrailingIcon(expanded = channelMenuExpanded)
                         },
@@ -206,43 +207,43 @@ fun SceneSegmentationView(
 
 @Composable
 private fun StatusCard(
-    sessionState: SemanticsSessionState,
-    warningEvent: SemanticsWarningEvent?
+    sessionState: SceneSegmentationSessionState,
+    warningEvent: SceneSegmentationWarningEvent?
 ) {
     val statusText = when (sessionState) {
-        SemanticsSessionState.Idle -> "Tap Start to load semantics"
-        SemanticsSessionState.LoadingChannels -> "Starting semantics..."
-        is SemanticsSessionState.Streaming -> {
+        SceneSegmentationSessionState.Idle -> "Tap Start to load Scene Segmentation"
+        SceneSegmentationSessionState.LoadingChannels -> "Starting Scene Segmentation..."
+        is SceneSegmentationSessionState.Streaming -> {
             val channelName = sessionState.channel?.toString()
-            channelName?.let { "Streaming $it" } ?: "Streaming semantics"
+            channelName?.let { "Streaming $it" } ?: "Streaming Scene Segmentation"
         }
-        SemanticsSessionState.Stopping -> "Stopping semantics..."
-        is SemanticsSessionState.Failed -> {
+        SceneSegmentationSessionState.Stopping -> "Stopping Scene Segmentation..."
+        is SceneSegmentationSessionState.Failed -> {
             val reason =
                 sessionState.cause?.message?.takeIf { it.isNotBlank() }
                     ?: sessionState.cause?.javaClass?.simpleName
-            reason?.let { "Semantics session failed: $it" } ?: "Semantics session failed"
+            reason?.let { "Scene Segmentation session failed: $it" } ?: "Scene Segmentation session failed"
         }
     }
 
     val warningText = when (warningEvent) {
-        is SemanticsWarningEvent.ChannelQueryFailed ->
+        is SceneSegmentationWarningEvent.ChannelQueryFailed ->
             "Channel query failed: ${warningEvent.cause.userFacingMessage()}"
 
-        is SemanticsWarningEvent.ChannelQueryError ->
+        is SceneSegmentationWarningEvent.ChannelQueryError ->
             "Channel query error: ${warningEvent.status.name}"
 
-        SemanticsWarningEvent.ChannelsUnavailable ->
-            "Semantic channels unavailable"
+        SceneSegmentationWarningEvent.ChannelsUnavailable ->
+            "Scene Segmentation channels unavailable"
 
-        is SemanticsWarningEvent.LatestConfidenceResultError ->
+        is SceneSegmentationWarningEvent.LatestConfidenceResultError ->
             "Latest confidence error (channel ${warningEvent.channelIndex}): " +
                 warningEvent.status.name
 
-        is SemanticsWarningEvent.StopFailed ->
-            "Failed to stop semantics: ${warningEvent.cause.userFacingMessage()}"
+        is SceneSegmentationWarningEvent.StopFailed ->
+            "Failed to stop Scene Segmentation: ${warningEvent.cause.userFacingMessage()}"
 
-        SemanticsWarningEvent.Cleared -> null
+        SceneSegmentationWarningEvent.Cleared -> null
         null -> null
     }
 
@@ -265,4 +266,3 @@ private fun StatusCard(
 
 private fun Throwable.userFacingMessage(): String =
     localizedMessage?.takeIf { it.isNotBlank() } ?: this::class.java.simpleName
-

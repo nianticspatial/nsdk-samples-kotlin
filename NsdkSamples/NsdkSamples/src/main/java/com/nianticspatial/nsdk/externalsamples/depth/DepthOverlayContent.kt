@@ -1,3 +1,4 @@
+// Copyright 2026 Niantic Spatial.
 package com.nianticspatial.nsdk.externalsamples.depth
 
 import android.graphics.Matrix
@@ -8,10 +9,10 @@ import com.google.android.filament.Engine
 import com.google.android.filament.MaterialInstance
 import com.google.android.filament.Texture
 import com.google.android.filament.TextureSampler
-import com.google.ar.core.Frame
 import com.nianticspatial.nsdk.DepthBuffer
+import com.nianticspatial.nsdk.NsdkFrame
 import com.nianticspatial.nsdk.utils.ImageMath
-import com.nianticspatial.nsdk.externalsamples.ARSessionManager
+import com.nianticspatial.nsdk.externalsamples.NSDKSessionManager
 import com.nianticspatial.nsdk.externalsamples.common.OverlayContent
 import io.github.sceneview.loaders.MaterialLoader
 import io.github.sceneview.safeDestroyTexture
@@ -25,7 +26,7 @@ import kotlin.math.atan
  */
 class DepthOverlayContent(
     private val depthManager: DepthManager,
-    private val sessionManager: ARSessionManager
+    private val sessionManager: NSDKSessionManager
 ) : OverlayContent() {
     companion object {
         private const val TAG = "DepthOverlayContent"
@@ -108,14 +109,14 @@ class DepthOverlayContent(
 
     private fun updateUvTransform(
         depthBuffer: DepthBuffer,
-        arFrame: Frame,
+        arFrame: NsdkFrame,
         viewportSize: Size,
         materialInstance: MaterialInstance
     ) {
         try {
             val imageSize = depthBuffer.intrinsics.getImageDimensions()
             val display = ImageMath.displayTransform(
-                orientation = sessionManager.lastImageOrientation,
+                orientation = sessionManager.currentImageOrientation,
                 viewportSize = viewportSize,
                 imageSize = Size(imageSize[0], imageSize[1])
             ) * ImageMath.affineInvertVertical()
@@ -140,7 +141,7 @@ class DepthOverlayContent(
         }
     }
 
-    private fun calculateReprojection(depthBuffer: DepthBuffer, arFrame: Frame): Matrix {
+    private fun calculateReprojection(depthBuffer: DepthBuffer, arFrame: NsdkFrame): Matrix {
         val reference = depthBuffer.pose.inverse()
         val target = arFrame.camera.pose.inverse()
         reference.toMatrix(referenceView, 0)
