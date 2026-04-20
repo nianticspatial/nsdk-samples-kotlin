@@ -1,6 +1,9 @@
 [versions]
+# Keep aligned with argeo/ardk-next/kotlin/library (included via composite build).
 agp = "8.10.1"
 kotlin = "2.2.0"
+# Must match argeo/ardk-next/kotlin/library/gradle.properties VERSION_NAME (composite substitution).
+nsdkComposite = "4.1.0"
 coreKtx = "1.10.1"
 junit = "4.13.2"
 junitVersion = "1.1.5"
@@ -44,6 +47,7 @@ appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "a
 androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigationCompose" }
 kotlin-serialization-json = {group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "serialization"}
 maplibre-compose = { module = "org.maplibre.compose:maplibre-compose", version = "0.12.1" }
+nsdk-composite = { group = "com.nianticspatial", name = "nsdk", version.ref = "nsdkComposite" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
