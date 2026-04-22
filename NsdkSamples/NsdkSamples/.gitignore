@@ -1,0 +1,10 @@
+# Ignore generated files
+/build
+/local.properties
+
+# Ignore generated AAR file - this should be built using prepare_android_studio_project.sh
+libs/generated/nsdk.aar
+
+# Playback: drop-in dataset folders are not tracked; only the placeholder is kept
+src/main/assets/playback/*
+!src/main/assets/playback/PUT_DATASET_HERE.txt
