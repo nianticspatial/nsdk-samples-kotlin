@@ -72,7 +72,7 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.material3:material3:1.2.0-alpha13")
-    implementation("com.nianticspatial:nsdk:4.0.0.26041500")
+    implementation("com.nianticspatial:nsdk:4.1.0-c.279345")
     implementation(libs.androidx.fragment.ktx)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.camera2)
