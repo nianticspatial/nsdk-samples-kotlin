@@ -220,7 +220,7 @@ private fun InfoBox(navState: SitesNavState) {
             text = when (navState) {
                 is SitesNavState.Loading -> "⏳ Loading..."
                 is SitesNavState.Error -> "❌ ${navState.message}"
-                is SitesNavState.UserView -> formatUserInfo(navState.user)
+                is SitesNavState.UserView -> navState.user?.let { formatUserInfo(it) } ?: "Select an Organization"
                 is SitesNavState.OrganizationView -> formatOrganizationInfo(navState.org)
                 is SitesNavState.NearMeResults -> "📍 Sites Near Me\nSearch for VPS sites near a GPS coordinate."
                 is SitesNavState.ModeSelection -> ""

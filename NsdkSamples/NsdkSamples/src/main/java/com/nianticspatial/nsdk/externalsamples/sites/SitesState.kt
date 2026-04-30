@@ -19,7 +19,7 @@ internal sealed class SitesNavState {
     object ModeSelection : SitesNavState()
     object Loading : SitesNavState()
     data class UserView(
-        val user: UserInfo,
+        val user: UserInfo?,
         val organizations: List<OrganizationInfo>,
         val warning: String? = null
     ) : SitesNavState()
