@@ -76,24 +76,14 @@ class SitesManager(
             try {
                 navState = SitesNavState.Loading
 
-                val userResult = retryHelper.withRetry {
-                    sitesSession.requestSelfUserInfo()
-                }
-                val user = userResult.user
-                if (user == null) {
-                    navState = SitesNavState.Error("Failed to retrieve user information")
-                    return@launch
-                }
-                currentUser = user
-
                 val orgsResult = retryHelper.withRetry {
-                    sitesSession.requestOrganizationsForUser(user.id)
+                    sitesSession.requestSelfOrganizationInfo()
                 }
                 val organizations = orgsResult.organizations
                 currentOrganizations = organizations
 
                 val warning = if (organizations.isEmpty()) "No organizations found" else null
-                navState = SitesNavState.UserView(user, organizations, warning)
+                navState = SitesNavState.UserView(null, organizations, warning)
 
             } catch (e: CancellationException) {
                 throw e
