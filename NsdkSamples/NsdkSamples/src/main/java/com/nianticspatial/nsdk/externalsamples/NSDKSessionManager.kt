@@ -134,5 +134,6 @@ class NSDKSessionManager(
         updateExecutor.awaitTermination(5, TimeUnit.SECONDS)
         (liveDataSource as? DefaultLifecycleObserver)?.onDestroy(owner)
         (playbackDataSource as? DefaultLifecycleObserver)?.onDestroy(owner)
+        runCatching { session.close() }.onFailure { Log.w(TAG, "NSDKSession.close failed", it) }
     }
 }

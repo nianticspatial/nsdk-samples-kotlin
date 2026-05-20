@@ -44,6 +44,12 @@ fun DepthView(
         DepthOverlayContent(depthManager, nsdkSessionManager)
     }
 
+    // Enable AR session for the duration this view is in composition
+    DisposableEffect(Unit) {
+        nsdkSessionManager.arManager.setEnabled(true)
+        onDispose { nsdkSessionManager.arManager.setEnabled(false) }
+    }
+
     // Register overlay content with ARSceneView
     DisposableEffect(depthOverlayContent) {
         overlayContentState.value = depthOverlayContent

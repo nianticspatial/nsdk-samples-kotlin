@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
 import androidx.navigation.NavHostController
 import com.nianticspatial.nsdk.LatLng
 import com.nianticspatial.nsdk.externalsamples.HelpContent
@@ -291,6 +292,7 @@ private fun NearMePanel(
     var latText by remember { mutableStateOf(DEFAULT_LAT.toString()) }
     var lngText by remember { mutableStateOf(DEFAULT_LNG.toString()) }
     var radiusText by remember { mutableStateOf(DEFAULT_RADIUS_METERS.toString()) }
+    var locationError by remember { mutableStateOf<String?>(null) }
 
     val filteredSites = remember(sitesWithAssets, filterText) {
         if (filterText.isBlank()) sitesWithAssets
@@ -312,22 +314,31 @@ private fun NearMePanel(
         StyledButton(
             text = "📍 Use My Location",
             onClick = {
+                locationError = null
                 val hasPermission = ContextCompat.checkSelfPermission(
                     context, Manifest.permission.ACCESS_FINE_LOCATION
                 ) == PackageManager.PERMISSION_GRANTED
-                if (hasPermission) {
+                if (!hasPermission) {
+                    locationError = "Location permission not granted. Please enable it in app settings."
+                } else {
                     LocationServices.getFusedLocationProviderClient(context)
-                        .lastLocation
+                        .getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
                         .addOnSuccessListener { location ->
                             if (location != null) {
                                 latText = String.format("%.6f", location.latitude)
                                 lngText = String.format("%.6f", location.longitude)
+                            } else {
+                                locationError = "Could not determine location. Please try again."
                             }
+                        }
+                        .addOnFailureListener { e ->
+                            locationError = "Failed to get location: ${e.message}"
                         }
                 }
             },
             color = Color(0xFF1565C0)
         )
+        locationError?.let { ErrorText(it) }
 
         StyledButton(
             text = "Search Nearby Sites",
@@ -510,6 +521,19 @@ private fun ErrorView(message: String) {
         color = Color(0xFFFF6B6B),
         fontSize = 14.sp,
         modifier = Modifier.padding(8.dp)
+    )
+}
+
+@Composable
+private fun ErrorText(message: String) {
+    Text(
+        text = "❌ $message",
+        color = Color(0xFFFF6B6B),
+        fontSize = 14.sp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF3D0000).copy(alpha = 0.3f), RoundedCornerShape(4.dp))
+            .padding(8.dp)
     )
 }
 

@@ -162,12 +162,10 @@ fun NSDKDemoView(modifier: Modifier = Modifier, activity: Activity) {
     val navContent: @Composable BoxScope.(overlayContentState: MutableState<OverlayContent?>) -> Unit = { overlayContentState ->
         NavHost(navController = navController, startDestination = SelectorRoute, modifier) {
             composable<SelectorRoute> { backStackEntry ->
-                LaunchedEffect(Unit) { sessionManager.setEnabled(false) }
                 SelectorView(navController, nsdkSession, topBarTrailingContent = authIconOverlay)
             }
 
             composable<VPS2Route> { backStackEntry ->
-                LaunchedEffect(Unit) { sessionManager.setEnabled(true) }
                 val args = backStackEntry.toRoute<VPS2Route>()
                 BackHelpScaffold(navController) { helpContentState ->
                     VPS2View(activity, nsdkSessionManager, helpContentState, args.payload)
@@ -175,49 +173,42 @@ fun NSDKDemoView(modifier: Modifier = Modifier, activity: Activity) {
             }
 
             composable<MeshingRoute> { backStackEntry ->
-                LaunchedEffect(Unit) { sessionManager.setEnabled(true) }
                 BackHelpScaffold(navController) { helpContentState ->
-                    MeshingView(activity, nsdkSession, helpContentState)
+                    MeshingView(activity, nsdkSessionManager, helpContentState)
                 }
             }
 
             composable<CaptureRoute> { backStackEntry ->
-                LaunchedEffect(Unit) { sessionManager.setEnabled(true) }
                 BackHelpScaffold(navController) { helpContentState ->
                     CaptureView(activity, nsdkSessionManager, helpContentState, overlayContentState)
                 }
             }
 
             composable<DepthRoute> { backStackEntry ->
-                LaunchedEffect(Unit) { sessionManager.setEnabled(true) }
                 BackHelpScaffold(navController) { helpContentState ->
                     DepthView(nsdkSessionManager, helpContentState, overlayContentState)
                 }
             }
 
             composable<OcclusionRoute> { _ ->
-                LaunchedEffect(Unit) { sessionManager.setEnabled(true) }
                 BackHelpScaffold(navController) { helpContentState ->
                     OcclusionView(nsdkSessionManager, helpContentState)
                 }
             }
 
             composable<SceneSegmentationRoute> { backStackEntry ->
-                LaunchedEffect(Unit) { sessionManager.setEnabled(true) }
                 BackHelpScaffold(navController) { helpContentState ->
                     SceneSegmentationView(nsdkSessionManager, helpContentState, overlayContentState)
                 }
             }
 
             composable<DeviceMappingRoute> { backStackEntry ->
-                LaunchedEffect(Unit) { sessionManager.setEnabled(true) }
                 BackHelpScaffold(navController) { helpContentState ->
                     DeviceMappingView(activity, nsdkSessionManager, helpContentState)
                 }
             }
 
             composable<SitesRoute> { backStackEntry ->
-                LaunchedEffect(Unit) { sessionManager.setEnabled(false) }
                 BackHelpScaffold(navController) { helpContentState ->
                     SitesView(nsdkSessionManager, navHostController = navController, helpContentState)
                 }

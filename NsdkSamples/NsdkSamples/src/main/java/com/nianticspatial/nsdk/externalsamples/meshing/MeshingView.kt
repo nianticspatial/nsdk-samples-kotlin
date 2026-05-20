@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.sp
 import com.nianticspatial.nsdk.NSDKSession
 import com.nianticspatial.nsdk.MeshData
 import com.nianticspatial.nsdk.externalsamples.HelpContent
+import com.nianticspatial.nsdk.externalsamples.NSDKSessionManager
 import com.nianticspatial.nsdk.externalsamples.LocalSceneEngine
 import com.nianticspatial.nsdk.externalsamples.LocalSceneMaterialLoader
 import kotlinx.serialization.Serializable
@@ -54,13 +55,13 @@ object MeshingRoute
 
 @OptIn(DelicateCoroutinesApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun MeshingView(context: Context, nsdkSession: NSDKSession, helpContentState: MutableState<HelpContent?>) {
+fun MeshingView(context: Context, nsdkSessionManager: NSDKSessionManager, helpContentState: MutableState<HelpContent?>) {
 
     // Get the scene engine and material loader from ARSceneView
     val engine = LocalSceneEngine.current
     val materialLoader = LocalSceneMaterialLoader.current
 
-    val meshingManager = remember { MeshingManager(nsdkSession) }
+    val meshingManager = remember { MeshingManager(nsdkSessionManager.session) }
     val meshRenderer = remember { MeshRenderer(engine, materialLoader) }
 
     var rootAnchorNode by remember { mutableStateOf<PoseNode?>(null) }
@@ -71,6 +72,12 @@ fun MeshingView(context: Context, nsdkSession: NSDKSession, helpContentState: Mu
     val onScreenLogs = remember { mutableStateListOf<String>() }
     val maxLogLines = 100
     val listState = rememberLazyListState()
+
+    // Enable AR session for the duration this view is in composition
+    DisposableEffect(Unit) {
+        nsdkSessionManager.arManager.setEnabled(true)
+        onDispose { nsdkSessionManager.arManager.setEnabled(false) }
+    }
 
     // Set Help contents
     DisposableEffect(Unit) {

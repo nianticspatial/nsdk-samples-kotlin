@@ -57,6 +57,12 @@ fun SceneSegmentationView(
     var overlayOpacity by remember { mutableFloatStateOf(0.5f) }
     val overlayContent = remember { SceneSegmentationOverlayContent(sceneSegmentationManager, nsdkSessionManager, overlayOpacity) }
 
+    // Enable AR session for the duration this view is in composition
+    DisposableEffect(Unit) {
+        nsdkSessionManager.arManager.setEnabled(true)
+        onDispose { nsdkSessionManager.arManager.setEnabled(false) }
+    }
+
     DisposableEffect(Unit) {
         helpContentState.value = {
             Text(
