@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -116,6 +117,12 @@ fun DeviceMappingView(context: Activity, nsdkSessionManager: NSDKSessionManager,
     // Track the point cloud node and its parent pose node for AR world space tracking
     var pointCloudNode by remember { mutableStateOf<PointCloudNode?>(null) }
     var pointCloudPoseNode by remember { mutableStateOf<PoseNode?>(null) }
+
+    // Enable AR session for the duration this view is in composition
+    DisposableEffect(Unit) {
+        nsdkSessionManager.arManager.setEnabled(true)
+        onDispose { nsdkSessionManager.arManager.setEnabled(false) }
+    }
 
     // Set Help contents
     DisposableEffect(Unit) {
@@ -353,9 +360,11 @@ fun DeviceMappingView(context: Activity, nsdkSessionManager: NSDKSessionManager,
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .fillMaxHeight()
                 .align(Alignment.TopCenter)
                 .offset(y = 120.dp)
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -402,6 +411,7 @@ fun DeviceMappingView(context: Activity, nsdkSessionManager: NSDKSessionManager,
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .weight(1f)
                         .padding(horizontal = 8.dp)
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(8.dp)

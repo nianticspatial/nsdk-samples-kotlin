@@ -15,7 +15,6 @@ import com.nianticspatial.nsdk.sites.AssetType
 import com.nianticspatial.nsdk.sites.OrganizationInfo
 import com.nianticspatial.nsdk.sites.SitesException
 import com.nianticspatial.nsdk.sites.SitesSession
-import com.nianticspatial.nsdk.sites.UserInfo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -44,7 +43,6 @@ class SitesManager(
         private set
 
     // Retained for back navigation and site sorting
-    private var currentUser: UserInfo? = null
     private var currentOrganizations: List<OrganizationInfo> = emptyList()
     var currentLocation: LatLng? = null
         private set
@@ -146,8 +144,7 @@ class SitesManager(
 
     fun onBackToUserView() {
         filterText = ""
-        val user = currentUser ?: return
-        navState = SitesNavState.UserView(user, currentOrganizations)
+        navState = SitesNavState.UserView(null, currentOrganizations)
     }
 
     fun onFilterChange(text: String) {
@@ -199,18 +196,10 @@ class SitesManager(
             throw e
         } catch (e: SitesException) {
             Log.e(TAG, "Sites error: ${e.error}", e)
-            val user = currentUser
-            navState = if (user != null)
-                SitesNavState.UserView(user, currentOrganizations, "Error loading sites: ${e.error}")
-            else
-                SitesNavState.Error("Error loading sites: ${e.error}")
+            navState = SitesNavState.UserView(null, currentOrganizations, "Error loading sites: ${e.error}")
         } catch (e: Exception) {
             Log.e(TAG, "Error loading sites", e)
-            val user = currentUser
-            navState = if (user != null)
-                SitesNavState.UserView(user, currentOrganizations, "Error: ${e.message}")
-            else
-                SitesNavState.Error("Error: ${e.message}")
+            navState = SitesNavState.UserView(null, currentOrganizations, "Error: ${e.message}")
         }
     }
 

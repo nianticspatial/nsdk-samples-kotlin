@@ -126,6 +126,12 @@ fun OcclusionView(
         }
     }
 
+    // Enable AR session for the duration this view is in composition
+    DisposableEffect(Unit) {
+        nsdkSessionManager.arManager.setEnabled(true)
+        onDispose { nsdkSessionManager.arManager.setEnabled(false) }
+    }
+
     DisposableEffect(cubeFrameListener) {
         nsdkSessionManager.arManager.addFrameUpdateListener(cubeFrameListener)
         onDispose {

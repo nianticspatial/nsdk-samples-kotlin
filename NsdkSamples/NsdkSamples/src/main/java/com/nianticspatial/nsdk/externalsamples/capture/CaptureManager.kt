@@ -15,8 +15,11 @@ import com.nianticspatial.nsdk.scanning.ScanningSession
 import com.nianticspatial.nsdk.externalsamples.FeatureManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -31,6 +34,9 @@ class CaptureManager(
         const val FRAME_COUNT_POLL_DELAY_MS = 100L
         const val RAYCAST_BUFFER_POLL_DELAY_MS = 16L  // 60 FPS
     }
+
+    // Tracks the in-flight export Job so onDestroy can wait for it before destroying native resources.
+    @Volatile private var exportJob: Job? = null
 
     var isRecording by mutableStateOf(false)
         private set
@@ -141,6 +147,10 @@ class CaptureManager(
             return Result.failure(Exception("No capture available to export"))
         }
 
+        // Register this coroutine's Job so onDestroy can wait for it before destroying
+        // native resources, preventing a use-after-free in RecordingExporter's finally block.
+        exportJob = currentCoroutineContext()[Job]
+
         try {
             val basePath = scanInfo.savePath!!
             val scanId = scanInfo.scanId!!
@@ -176,14 +186,26 @@ class CaptureManager(
             Log.e("CaptureManager", "Export failed with exception", e)
             return Result.failure(Exception("Export failed: ${e.message}"))
         } finally {
+            exportJob = null
             isExporting = false
         }
     }
 
     override fun onDestroy(owner: LifecycleOwner) {
         stop()
-        scanningSession.close()
-        recordingExporter.close()
+        val pendingExport = exportJob
+        val scanner = scanningSession
+        val exporter = recordingExporter
+        exportJob = null
         coroutineScope.cancel()
+        // Dispatch native resource cleanup to a background thread so we can wait for the
+        // in-flight export coroutine (including its finally block) before calling close().
+        // We cannot use runBlocking here because the export coroutine runs on the main
+        // dispatcher — blocking the main thread would deadlock.
+        CoroutineScope(Dispatchers.IO).launch {
+            pendingExport?.cancelAndJoin()
+            scanner.close()
+            exporter.close()
+        }
     }
 }

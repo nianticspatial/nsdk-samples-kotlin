@@ -4,6 +4,8 @@ package com.nianticspatial.nsdk.externalsamples.capture
 import android.app.Activity
 import android.content.Intent
 import android.util.Log
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.FileProvider
 import java.io.File
@@ -19,7 +21,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,6 +59,12 @@ fun CaptureView(
 
     val lifecycleOwner = LocalLifecycleOwner.current
     val coroutineScope = rememberCoroutineScope()
+
+    // Enable AR session for the duration this view is in composition
+    DisposableEffect(Unit) {
+        nsdkManager.arManager.setEnabled(true)
+        onDispose { nsdkManager.arManager.setEnabled(false) }
+    }
 
     val captureOverlayContent = remember(captureManager) { CaptureOverlayContent(captureManager) }
     DisposableEffect(captureOverlayContent) {
@@ -108,6 +119,11 @@ private fun CaptureControls(
     context: Activity,
     coroutineScope: CoroutineScope
 ) {
+    var exportInFlight by remember { mutableStateOf(false) }
+
+    val shareLauncher = rememberLauncherForActivityResult(StartActivityForResult()) {
+        exportInFlight = false
+    }
 
     Column(
         modifier = Modifier
@@ -154,12 +170,14 @@ private fun CaptureControls(
 
         if (captureManager.saveInfo != null && !captureManager.isExporting) {
             Button(
-                enabled = !captureManager.isRecording && !captureManager.isSaving,
+                enabled = !captureManager.isRecording && !captureManager.isSaving &&
+                    !captureManager.isExporting,
                 onClick = {
+                    if (exportInFlight) return@Button
+                    exportInFlight = true
                     coroutineScope.launch {
-                        val result = captureManager.export()
-                        // Run on main thread for file sharing
-                        context.runOnUiThread {
+                        try {
+                            val result = captureManager.export()
                             result.onSuccess { exportedPath ->
                                 try {
                                     val file = File(exportedPath)
@@ -169,28 +187,32 @@ private fun CaptureControls(
                                             "${context.packageName}.fileprovider",
                                             file
                                         )
-
                                         val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                            type = "application/zip" // or "application/octet-stream" for generic files
+                                            type = "application/zip"
                                             putExtra(Intent.EXTRA_STREAM, uri)
                                             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                         }
-
-                                        val chooser = Intent.createChooser(shareIntent, "Share Capture")
-                                        context.startActivity(chooser)
+                                        shareLauncher.launch(Intent.createChooser(shareIntent, "Share Capture"))
                                     } else {
                                         Log.e("CaptureView", "Exported file not found at: $exportedPath")
+                                        exportInFlight = false
                                     }
                                 } catch (e: Exception) {
                                     Log.e("CaptureView", "Failed to share exported file", e)
+                                    exportInFlight = false
                                 }
                             }.onFailure { exception ->
-                                AlertDialog.Builder(context)
-                                    .setTitle("Export Failed")
-                                    .setMessage(exception.message ?: "Unknown error")
-                                    .setPositiveButton("OK", null)
-                                    .show()
+                                context.runOnUiThread {
+                                    AlertDialog.Builder(context)
+                                        .setTitle("Export Failed")
+                                        .setMessage(exception.message ?: "Unknown error")
+                                        .setPositiveButton("OK", null)
+                                        .show()
+                                }
+                                exportInFlight = false
                             }
+                        } catch (e: Exception) {
+                            exportInFlight = false
                         }
                     }
                 }

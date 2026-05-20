@@ -90,6 +90,12 @@ fun VPS2View(
         }
     }
 
+    // Enable AR session for the duration this view is in composition
+    DisposableEffect(Unit) {
+        nsdkManager.arManager.setEnabled(true)
+        onDispose { nsdkManager.arManager.setEnabled(false) }
+    }
+
     // Set Help contents
     DisposableEffect(Unit) {
         helpContentState.value = {
