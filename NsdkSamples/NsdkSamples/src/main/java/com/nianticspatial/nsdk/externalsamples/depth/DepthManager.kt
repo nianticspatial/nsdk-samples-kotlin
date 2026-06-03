@@ -83,8 +83,9 @@ class DepthManager(
                 when (val latestDepth = depthSession.latestDepth()) {
                     is NSDKResult.Success -> {
                         hasReceivedFirstFrame = true
-                        if (latestDepth.value.timestampMs > lastFrameTime) {
-                            lastFrameTime = latestDepth.value.timestampMs
+                        val ts = latestDepth.value.timestampMs
+                        if (ts != lastFrameTime) {
+                            lastFrameTime = ts
                             currentDepthBuffer = latestDepth.value
                         }
                     }

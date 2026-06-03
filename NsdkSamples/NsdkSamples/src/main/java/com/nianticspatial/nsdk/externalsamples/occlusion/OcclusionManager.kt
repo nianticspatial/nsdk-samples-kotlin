@@ -7,31 +7,39 @@ import android.util.Size
 import androidx.core.graphics.times
 import androidx.lifecycle.LifecycleOwner
 import com.google.android.filament.Engine
+import com.google.android.filament.Material
 import com.google.android.filament.MaterialInstance
+import com.google.android.filament.RenderableManager
 import com.google.android.filament.Texture
 import com.google.android.filament.TextureSampler
 import com.nianticspatial.nsdk.DepthBuffer
+import com.nianticspatial.nsdk.NsdkFrame
 import com.nianticspatial.nsdk.externalsamples.FeatureManager
+import com.nianticspatial.nsdk.externalsamples.NSDKSessionManager
 import com.nianticspatial.nsdk.externalsamples.OnFrameUpdateListener
+import com.nianticspatial.nsdk.externalsamples.SessionMode
+import com.nianticspatial.nsdk.externalsamples.arChildNodes
 import com.nianticspatial.nsdk.externalsamples.depth.DepthManager
+import com.nianticspatial.nsdk.externalsamples.destroyRecursively
 import com.nianticspatial.nsdk.utils.ImageMath
+import io.github.sceneview.ar.camera.ARCameraStream
+import io.github.sceneview.ar.camera.kCameraTextureParameter
+import io.github.sceneview.ar.camera.kUVTransformParameter
+import io.github.sceneview.geometries.Geometry
+import io.github.sceneview.loaders.MaterialLoader
+import io.github.sceneview.material.setExternalTexture
+import io.github.sceneview.material.setParameter
+import io.github.sceneview.math.Position
+import io.github.sceneview.math.Transform
+import io.github.sceneview.node.GeometryNode
 import io.github.sceneview.safeDestroyTexture
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.atan
 import android.content.Context
-import com.google.android.filament.Material
-import com.nianticspatial.nsdk.NsdkFrame
-import com.nianticspatial.nsdk.externalsamples.NSDKSessionManager
-import io.github.sceneview.ar.camera.ARCameraStream
-import io.github.sceneview.ar.camera.kCameraTextureParameter
-import io.github.sceneview.ar.camera.kUVTransformParameter
-import io.github.sceneview.loaders.MaterialLoader
-import io.github.sceneview.material.setExternalTexture
-import io.github.sceneview.material.setParameter
-import io.github.sceneview.math.Transform
 
 private const val _DEPTH_MATERIAL = "materials/camera_stream_depth_nsdk.filamat"
+private const val _DEPTH_PREPASS_MATERIAL = "materials/depth_prepass_nsdk.filamat"
 private const val _TAG = "OcclusionManager"
 
 /**
@@ -43,8 +51,18 @@ private const val _TAG = "OcclusionManager"
  * depth polling. Call [onDestroy] to stop depth polling, unregister the frame listener,
  * restore the original [cameraStream] material, and release all Filament objects.
  *
- * Two per-frame corrections are applied:
- * ...
+ * In live mode, [ARCameraStream] renders the background through Filament and the depth
+ * material writes gl_FragDepth from NSDK depth data. In playback mode, the background is
+ * an Android View outside Filament's render pipeline, so a depth-only prepass node is
+ * added to the scene at render priority 0 to write NSDK depth into Filament's depth buffer
+ * before the cube renders.
+ *
+ * Two per-frame corrections are applied to the depth UV mapping:
+ * - Display orientation: the NSDK depth image is in sensor orientation; it is rotated and
+ *   scaled to match the current display orientation and viewport aspect ratio.
+ * - Temporal reprojection: NSDK depth runs asynchronously and lags the AR frame; each screen
+ *   pixel is remapped to where it fell in the depth image at capture time so that occlusion
+ *   edges remain correctly placed under motion.
  *
  * @param engine Filament engine used to create and destroy GPU resources.
  * @param nsdkSessionManager Created in NSDKDemoView, passed to OcclusionView as a Compose
@@ -74,7 +92,7 @@ class OcclusionManager(
     private val _depthManager = DepthManager(nsdkSessionManager.session.depthSession.acquire())
     private var materialInstance: MaterialInstance? = null
     private var _nsdkMaterial: Material? = null
-    private var _originalMaterialInstances: List<MaterialInstance>? = null
+    private var _originalMaterialInstance: MaterialInstance? = null
     private var _depthTexture: Texture? = null
     private var _lastDepthTimestamp: Long = -1L
     private val _referenceView: FloatArray = FloatArray(16)
@@ -85,6 +103,12 @@ class OcclusionManager(
         TextureSampler.MagFilter.LINEAR,
         TextureSampler.WrapMode.CLAMP_TO_EDGE
     )
+    // Playback-only: a depth-write-only full-screen quad that feeds NSDK depth into
+    // Filament's depth buffer. In live mode ARCameraStream handles this via the background
+    // pass; in playback mode the background is an Android View outside Filament's pipeline.
+    private var _depthPrepassMaterialInstance: MaterialInstance? = null
+    private var _depthPrepassNsdkMaterial: Material? = null
+    private var _depthPrepassNode: GeometryNode? = null
 
     /** Current viewport dimensions. Must be set before depth UV transform is computed. */
     var viewportSize: Size? = null
@@ -92,7 +116,7 @@ class OcclusionManager(
     init {
         nsdkSessionManager.arManager.addFrameUpdateListener(this)
         cameraStream?.let { stream ->
-            _originalMaterialInstances = stream.materialInstances
+            _originalMaterialInstance = stream.materialInstances.firstOrNull()
             val buffer = context.assets.open(_DEPTH_MATERIAL).use {
                 ByteBuffer.wrap(it.readBytes())
             }
@@ -105,6 +129,15 @@ class OcclusionManager(
             stream.setMaterialInstances(_nsdkMaterial!!.defaultInstance)
             materialInstance = _nsdkMaterial!!.defaultInstance
         }
+
+        if (nsdkSessionManager.arManager.mode == SessionMode.PLAYBACK) {
+            val prepassBuffer = context.assets.open(_DEPTH_PREPASS_MATERIAL).use {
+                ByteBuffer.wrap(it.readBytes())
+            }
+            _depthPrepassNsdkMaterial = materialLoader.createMaterial(prepassBuffer)
+            _depthPrepassMaterialInstance = _depthPrepassNsdkMaterial!!.createInstance()
+            _depthPrepassNode = _createDepthPrepassNode(_depthPrepassMaterialInstance!!)
+        }
     }
 
     /**
@@ -116,6 +149,7 @@ class OcclusionManager(
      */
     fun start() {
         _depthManager.startDepth()
+        _depthPrepassNode?.let { arChildNodes.add(it) }
     }
 
     /**
@@ -126,9 +160,11 @@ class OcclusionManager(
      *   and the current AR frame so occlusion edges stay correctly placed under motion.
      */
     override fun onFrameUpdate(frame: NsdkFrame) {
-        val mi = materialInstance ?: return
         val depthBuffer = _depthManager.currentDepthBuffer ?: return
         val currentViewportSize = viewportSize ?: return
+        // materialInstance is null only if cameraStream was unavailable at construction.
+        // The prepass material is updated regardless so playback occlusion is not affected.
+        val mi = materialInstance
 
         if (depthBuffer.timestampMs != _lastDepthTimestamp) {
             _updateDepthTexture(depthBuffer, mi)
@@ -141,7 +177,7 @@ class OcclusionManager(
      * Allocates or reuses a Filament R32F texture and uploads the latest depth
      * image from [depthBuffer]. Recreates the texture if dimensions have changed.
      */
-    private fun _updateDepthTexture(depthBuffer: DepthBuffer, mi: MaterialInstance) {
+    private fun _updateDepthTexture(depthBuffer: DepthBuffer, mi: MaterialInstance?) {
         try {
             val width = depthBuffer.imageWidth
             val height = depthBuffer.imageHeight
@@ -155,7 +191,8 @@ class OcclusionManager(
                     .format(Texture.InternalFormat.R32F)
                     .levels(1)
                     .build(engine)
-                mi.setParameter("depthTexture", _depthTexture!!, _depthTextureSampler)
+                mi?.setParameter("depthTexture", _depthTexture!!, _depthTextureSampler)
+                _depthPrepassMaterialInstance?.setParameter("depthTexture", _depthTexture!!, _depthTextureSampler)
             }
             val byteBuffer = ByteBuffer.allocateDirect(depthBuffer.image.size * Float.SIZE_BYTES)
                 .order(ByteOrder.nativeOrder())
@@ -168,19 +205,8 @@ class OcclusionManager(
         }
     }
 
-    /**
-     * Computes the combined display + reprojection UV transform and writes it
-     * to the [MaterialInstance] as a mat3 parameter.
-     *
-     * Two corrections are applied each frame:
-     * - Display orientation: the NSDK depth image is in sensor orientation and must
-     *   be rotated/flipped to match the current display orientation and viewport aspect ratio.
-     * - Temporal reprojection: NSDK depth runs asynchronously and lags behind the
-     *   AR frame. The depth was captured from a slightly different camera pose, so
-     *   each screen pixel must be remapped to where it fell in the depth image at
-     *   capture time. Without this, fast motion causes depth to drift against the scene.
-     */
-    private fun _updateUvTransform(depthBuffer: DepthBuffer, arFrame: NsdkFrame, viewportSize: Size, mi: MaterialInstance) {
+    /** Computes the combined display + reprojection UV transform and writes it as a mat3 parameter. */
+    private fun _updateUvTransform(depthBuffer: DepthBuffer, arFrame: NsdkFrame, viewportSize: Size, mi: MaterialInstance?) {
         try {
             val imageSize = depthBuffer.intrinsics.getImageDimensions()
             val display = ImageMath.displayTransform(
@@ -192,7 +218,8 @@ class OcclusionManager(
             val uvTransform = Matrix()
             (display * reprojection).invert(uvTransform)
             uvTransform.getValues(_uvTransformMatrix)
-            mi.setParameter("depthUvTransform", MaterialInstance.FloatElement.MAT3, _uvTransformMatrix, 0, 1)
+            mi?.setParameter("depthUvTransform", MaterialInstance.FloatElement.MAT3, _uvTransformMatrix, 0, 1)
+            _depthPrepassMaterialInstance?.setParameter("depthUvTransform", MaterialInstance.FloatElement.MAT3, _uvTransformMatrix, 0, 1)
         } catch (e: Exception) {
             Log.e(_TAG, "Failed to update UV transform: ${e.message}", e)
         }
@@ -224,17 +251,54 @@ class OcclusionManager(
         )
     }
 
+    /**
+     * Creates a full-screen depth-only quad for playback mode.
+     *
+     * The quad covers the entire viewport in device (clip) space and uses
+     * [depth_prepass_nsdk.filamat] which has [colorWrite: false] — it writes only to the
+     * depth buffer. Rendered at priority 0 so it runs before all scene objects, allowing
+     * the cube to depth-test correctly against real-world surfaces.
+     */
+    private fun _createDepthPrepassNode(mi: MaterialInstance): GeometryNode {
+        val geometry = Geometry.Builder(RenderableManager.PrimitiveType.TRIANGLES)
+            .vertices(listOf(
+                Geometry.Vertex(position = Position(-1f, -1f, 0f)),
+                Geometry.Vertex(position = Position( 1f, -1f, 0f)),
+                Geometry.Vertex(position = Position( 1f,  1f, 0f)),
+                Geometry.Vertex(position = Position(-1f,  1f, 0f))
+            ))
+            .primitivesIndices(listOf(listOf(0, 1, 2, 2, 3, 0)))
+            .build(engine)
+        return GeometryNode(
+            engine = engine,
+            geometry = geometry,
+            materialInstance = mi,
+            builderApply = {
+                priority(0)
+                culling(false)
+                castShadows(false)
+                receiveShadows(false)
+            }
+        )
+    }
+
     /** Releases the depth [Texture] allocated on the GPU. */
     override fun onDestroy(owner: LifecycleOwner) {
         super.onDestroy(owner)
         nsdkSessionManager.arManager.removeFrameUpdateListener(this)
         _depthManager.onDestroy(owner)
         materialInstance = null
-        _originalMaterialInstances?.firstOrNull()?.let { cameraStream?.setMaterialInstances(it) }
+        _originalMaterialInstance?.let { cameraStream?.setMaterialInstances(it) }
         _nsdkMaterial?.let { materialLoader.destroyMaterial(it) }
         _nsdkMaterial = null
         _depthTexture?.let { engine.safeDestroyTexture(it) }
         _depthTexture = null
+        _depthPrepassNode?.destroyRecursively(arChildNodes)
+        _depthPrepassNode = null
+        _depthPrepassMaterialInstance?.let { engine.destroyMaterialInstance(it) }
+        _depthPrepassMaterialInstance = null
+        _depthPrepassNsdkMaterial?.let { materialLoader.destroyMaterial(it) }
+        _depthPrepassNsdkMaterial = null
     }
 
 }
