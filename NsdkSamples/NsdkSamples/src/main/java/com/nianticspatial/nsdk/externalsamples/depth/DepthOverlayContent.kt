@@ -94,9 +94,7 @@ class DepthOverlayContent(
 
         // Check if we have a new depth frame
         val currentTimestamp = depthBuffer.timestampMs
-        val needsTextureUpdate = currentTimestamp != lastDepthBufferTimestamp
-
-        if (needsTextureUpdate) {
+        if (currentTimestamp != lastDepthBufferTimestamp) {
             updateDepthTexture(engine, depthBuffer, materialInstance)
             lastDepthBufferTimestamp = currentTimestamp
         }

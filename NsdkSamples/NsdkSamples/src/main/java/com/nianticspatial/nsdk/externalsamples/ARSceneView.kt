@@ -161,7 +161,8 @@ fun ARSceneView(
             if (mode == SessionMode.PLAYBACK) {
                 val frame = currentPlaybackFrame ?: return@LaunchedEffect
                 val cam = frame.camera
-                playbackCameraNode.worldTransform = cam.getDisplayOrientedPose(deviceOrientation).transform
+                val displayPose = cam.getDisplayOrientedPose(deviceOrientation)
+                playbackCameraNode.worldTransform = displayPose.transform
                 val (imgW, imgH) = cam.imageResolution
                 val near = 0.1f
                 val far = 1000f
