@@ -11,6 +11,8 @@ import com.nianticspatial.nsdk.NSDKSession
 import com.nianticspatial.nsdk.externalsamples.FeatureManager
 import com.nianticspatial.nsdk.externalsamples.auth.AuthRetryHelper
 import com.nianticspatial.nsdk.sites.AssetDeploymentType
+import com.nianticspatial.nsdk.sites.AssetInfo
+import com.nianticspatial.nsdk.sites.AssetScope
 import com.nianticspatial.nsdk.sites.AssetType
 import com.nianticspatial.nsdk.sites.OrganizationInfo
 import com.nianticspatial.nsdk.sites.SitesException
@@ -31,6 +33,13 @@ class SitesManager(
 
     companion object {
         private const val TAG = "SitesManager"
+
+        /** The VPS assets in [scope] that VPS2 can localize to: those with a map. */
+        private fun vpsAssets(assets: List<AssetInfo>, scope: AssetScope): List<AssetInfo> =
+            assets.filter {
+                it.vpsData?.anchorPayload?.isNotBlank() == true &&
+                    (scope == AssetScope.ALL || it.deployment == AssetDeploymentType.PRODUCTION)
+            }
     }
 
     private val sitesSession: SitesSession = nsdkSession.sites.acquire()
@@ -47,13 +56,35 @@ class SitesManager(
     var currentLocation: LatLng? = null
         private set
 
+    // Which assets the lists show: production only, or all. Non-production ones localize by asset ID.
+    var assetScope by mutableStateOf(AssetScope.PRODUCTION)
+        private set
+
+    // The last near-me search (lat, lng, radius), so a scope change can re-run it.
+    private var lastNearMeSearch: Triple<Double, Double, Double>? = null
+
     fun onStartFromOrgsFlow() {
         loadInitialData()
     }
 
     fun onStartNearMeFlow() {
         filterText = ""
+        lastNearMeSearch = null
         navState = SitesNavState.NearMeResults(emptyList())
+    }
+
+    /** Switches [assetScope] and re-runs the list on screen with it. */
+    fun onAssetScopeChange(scope: AssetScope) {
+        if (scope == assetScope) return
+        assetScope = scope
+        when (val state = navState) {
+            is SitesNavState.NearMeResults -> lastNearMeSearch?.let { (lat, lng, radiusMeters) ->
+                coroutineScope.launch { loadNearMeSites(lat, lng, radiusMeters) }
+            }
+            is SitesNavState.OrganizationView ->
+                coroutineScope.launch { loadSitesForOrganization(state.org) }
+            else -> Unit
+        }
     }
 
     fun onBackToModeSelection() {
@@ -64,6 +95,7 @@ class SitesManager(
     fun onNearMeSearch(lat: Double, lng: Double, radiusMeters: Double, location: LatLng?) {
         filterText = ""
         currentLocation = location
+        lastNearMeSearch = Triple(lat, lng, radiusMeters)
         coroutineScope.launch {
             loadNearMeSites(lat, lng, radiusMeters)
         }
@@ -98,24 +130,22 @@ class SitesManager(
     private suspend fun loadNearMeSites(lat: Double, lng: Double, radiusMeters: Double) {
         try {
             navState = SitesNavState.Loading
+            val scope = assetScope
 
             val result = retryHelper.withRetry {
                 sitesSession.requestSiteAssetsByLocation(
                     lat = lat,
                     lng = lng,
                     radiusMeters = radiusMeters,
-                    assetType = AssetType.VPS_INFO
+                    assetType = AssetType.VPS_INFO,
+                    scope = scope,
                 )
             }
 
-            // Keep only entries that have a Production VPS asset with a non-blank payload
-            val sitesWithAssets = result.entries.mapNotNull { entry ->
-                val vpsAsset = entry.assets.firstOrNull { asset ->
-                    val vps = asset.vpsData
-                    vps != null && vps.anchorPayload.isNotBlank() &&
-                        asset.deployment == AssetDeploymentType.PRODUCTION
-                }
-                if (vpsAsset != null) SiteWithVpsAsset(entry.site, vpsAsset) else null
+            // One entry per VPS asset with a non-blank payload.
+            // Pass the VPS map asset ID; MeshDownloader resolves the mesh sibling.
+            val sitesWithAssets = result.entries.flatMap { entry ->
+                vpsAssets(entry.assets, scope).map { SiteWithVpsAsset(entry.site, it) }
             }
 
             val warning = if (sitesWithAssets.isEmpty())
@@ -165,30 +195,28 @@ class SitesManager(
                 return
             }
 
+            val scope = assetScope
             val sitesWithAssets = coroutineScope {
                 allSites.map { site ->
                     async {
                         try {
+                            // This endpoint returns every asset, production or not, so vpsAssets
+                            // applies the scope.
                             val assetsResult = retryHelper.withRetry {
                                 sitesSession.requestAssetsForSite(site.id)
                             }
-                            val vpsAsset = assetsResult.assets.firstOrNull { asset ->
-                                val vps = asset.vpsData
-                                vps != null &&
-                                    vps.anchorPayload.isNotBlank() &&
-                                    asset.deployment == AssetDeploymentType.PRODUCTION
-                            }
-                            if (vpsAsset != null) SiteWithVpsAsset(site, vpsAsset) else null
+                            // Pass the VPS map asset ID; MeshDownloader resolves the mesh sibling.
+                            vpsAssets(assetsResult.assets, scope).map { SiteWithVpsAsset(site, it) }
                         } catch (e: Exception) {
                             Log.w(TAG, "Failed to load assets for site ${site.name}: ${e.message}")
-                            null
+                            emptyList()
                         }
                     }
-                }.mapNotNull { it.await() }
+                }.flatMap { it.await() }
             }
 
             val warning = if (sitesWithAssets.isEmpty())
-                "No sites with Production VPS asset found for ${org.name}"
+                "No sites with a ${if (scope == AssetScope.PRODUCTION) "Production " else ""}VPS asset found for ${org.name}"
             else null
             navState = SitesNavState.OrganizationView(org, sitesWithAssets, warning)
 

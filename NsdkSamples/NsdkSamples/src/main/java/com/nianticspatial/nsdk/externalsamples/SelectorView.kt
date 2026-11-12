@@ -25,6 +25,7 @@ import com.nianticspatial.nsdk.externalsamples.scenesegmentation.SceneSegmentati
 import com.nianticspatial.nsdk.externalsamples.mapping.DeviceMappingRoute
 import com.nianticspatial.nsdk.externalsamples.sites.SitesRoute
 import com.nianticspatial.nsdk.externalsamples.occlusion.OcclusionRoute
+import com.nianticspatial.nsdk.externalsamples.playbackselect.PlaybackSelectRoute
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -80,9 +81,20 @@ fun SelectorView(
                 modifier = buttonModifier
             ) { Text(text = "Device Mapping") }
             Button(
-                onClick = { navHostController.navigate(VPS2Route()) },
+                onClick = { navHostController.navigate(VPS2Route(useSiteLocalization = true)) },
                 modifier = buttonModifier
-            ) { Text(text = "VPS2 (with anchor payload)") }
+            ) { Text(text = "VPS2 (with site ID)") }
+            Button(
+                onClick = { navHostController.navigate(PlaybackSelectRoute) },
+                modifier = buttonModifier
+            ) { Text(text = "Playback Select") }
+            // Samples contributed at runtime via SampleRegistry (empty by default).
+            SampleRegistry.entries.forEach { entry ->
+                Button(
+                    onClick = { navHostController.navigate(entry.routeId) },
+                    modifier = buttonModifier
+                ) { Text(text = entry.label) }
+            }
             Text(text = "NSDK v" + nsdkSession.getVersion())
         }
         topBarTrailingContent?.invoke()

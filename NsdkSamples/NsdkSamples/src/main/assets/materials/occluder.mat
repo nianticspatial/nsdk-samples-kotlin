@@ -1,0 +1,35 @@
+// Depth-only occluder material.
+//
+// Writes depth but NO color (colorWrite : false), so the triangles it is applied to are completely
+// invisible yet still populate the depth buffer. MeshRenderer draws an occluder copy of the mesh's
+// solid faces so the wireframe self-occludes — near surfaces hide the mesh's own far lines.
+//
+// It MUST be in the transparent pass (blending : transparent), not opaque. The camera feed is an
+// opaque renderable drawn last in the opaque pass (priority 7) and it is depth tested; an opaque
+// occluder would write the mesh depth first and the camera would then fail the depth test there,
+// leaving the clear color (black) where the mesh is. Every transparent object is drawn after every
+// opaque one, so this runs after the camera; MeshRenderer gives it a lower priority than the
+// wireframe so its depth is complete before the wireframe is depth tested against it.
+//
+// Compile with matc into occluder.filamat next to this file, e.g.:
+//   matc -a opengl -p mobile \
+//     -o src/main/assets/materials/occluder.filamat \
+//        src/main/assets/materials/occluder.mat
+material {
+    name : occluder,
+    shadingModel : unlit,
+    blending : transparent,
+    colorWrite : false,
+    depthWrite : true,
+    depthCulling : true,
+    // Must match wireframe.mat, which is double-sided. Otherwise back-facing surfaces show their
+    // edges but do not hide the edges behind them.
+    doubleSided : true
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        // No color output — colorWrite is disabled; only depth is written.
+    }
+}

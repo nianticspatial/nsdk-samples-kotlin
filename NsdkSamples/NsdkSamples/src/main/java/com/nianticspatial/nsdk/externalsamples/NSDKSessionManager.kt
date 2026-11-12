@@ -37,11 +37,14 @@ import com.nianticspatial.nsdk.helpers.createPlaybackDataSource
  * @param context Used to initialise the live data source (location, sensors).
  * @param session The NSDK session to update each frame.
  * @param arManager Source of frame events and session mode.
+ * @param captureDepth Whether the live data source snapshots ARCore depth each frame. Must
+ *   match the `useLidar` flag the session was created with.
  */
 class NSDKSessionManager(
     context: Context,
     val session: NSDKSession,
-    val arManager: ARSessionManager
+    val arManager: ARSessionManager,
+    private val captureDepth: Boolean = false
 ) : DefaultLifecycleObserver, OnFrameUpdateListener {
 
     companion object {
@@ -61,7 +64,8 @@ class NSDKSessionManager(
         createLiveDataSource(
             context = context,
             frameProvider = { arManager.currentLiveFrame },
-            orientationProvider = { arManager.deviceOrientation }
+            orientationProvider = { arManager.deviceOrientation },
+            captureDepth = captureDepth
         )
     }
 

@@ -17,6 +17,7 @@ cameraLifecycle = "1.4.1"
 appcompatVersion = "1.7.0"
 navigationCompose = "2.9.5"
 serialization = "1.8.1"
+protobuf = "3.25.3"
 
 [libraries]
 androidx-camera-camera2 = { module = "androidx.camera:camera-camera2" }
@@ -44,6 +45,8 @@ appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "a
 androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigationCompose" }
 kotlin-serialization-json = {group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "serialization"}
 maplibre-compose = { module = "org.maplibre.compose:maplibre-compose", version = "0.12.1" }
+protobuf-java = { module = "com.google.protobuf:protobuf-java", version.ref = "protobuf" }
+protobuf-java-util = { module = "com.google.protobuf:protobuf-java-util", version.ref = "protobuf" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

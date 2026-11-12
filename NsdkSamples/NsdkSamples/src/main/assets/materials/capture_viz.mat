@@ -16,6 +16,10 @@ material {
         {
             type : int,
             name : stripeRedPixels
+        },
+        {
+            type : mat3,
+            name : uvTransform
         }
     ],
     requires : [
@@ -26,7 +30,11 @@ material {
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        vec2 uv = getUV0();
+
+        // Screen UV to raycast image UV. uvTransform is uploaded row-major from
+        // android.graphics.Matrix, so the vector goes on the left.
+        vec3 uvh = vec3(getUV0(), 1.0) * materialParams.uvTransform;
+        vec2 uv = uvh.xy / uvh.z;
 
         // Sample the raycast texture (RGB = color, A = scanned/unscanned)
         vec4 raycastColor = texture(materialParams_visualizationTexture, uv);

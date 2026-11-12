@@ -1,0 +1,57 @@
+// Wireframe material (barycentric edges).
+//
+// Draws triangle EDGES in the fragment shader from barycentric coordinates that MeshRenderer packs
+// into the vertex color attribute (see MeshRenderer.buildBarycentricGeometry): each triangle is
+// de-indexed to three corners carrying (1,0,0), (0,1,0), (0,0,1). The interior is left fully
+// transparent so the camera passthrough shows through; only the edges are painted.
+//
+// Depth is written by the separate depth-only occluder (materials/occluder.filamat), drawn just before
+// this in the transparent pass, so this material only tests depth (depthWrite:false) — that is what
+// makes the wireframe self-occlude.
+//
+// Compile with matc into wireframe.filamat next to this file, e.g.:
+//   matc -a opengl -p mobile \
+//     -o src/main/assets/materials/wireframe.filamat \
+//        src/main/assets/materials/wireframe.mat
+material {
+    name : wireframe,
+
+    parameters : [
+        { type : float3, name : lineColor },
+        { type : float,  name : lineWidth }
+    ],
+
+    // Barycentric coordinates arrive in the vertex color (RGB).
+    requires : [
+        color
+    ],
+
+    shadingModel : unlit,
+    blending : transparent,
+    depthWrite : false,
+    depthCulling : true,
+    doubleSided : true,
+    // Feature level 1 (GLES 3.0) so screen-space derivatives (fwidth) are core.
+    featureLevel : 1
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        // Per-corner barycentric coords, interpolated across the triangle.
+        vec3 bary = getColor().rgb;
+
+        // Distance to the nearest edge, measured in screen space via derivatives so the line keeps a
+        // roughly constant pixel width regardless of distance.
+        vec3 d = fwidth(bary);
+        vec3 smoothed = smoothstep(vec3(0.0), d * materialParams.lineWidth, bary);
+        float edge = 1.0 - min(min(smoothed.x, smoothed.y), smoothed.z);
+
+        // Filament's transparent blending is PREMULTIPLIED (final = src.rgb + dst*(1 - src.a)), so the
+        // rgb must already be multiplied by alpha. In the interior (edge ≈ 0) this yields rgb 0, a 0 →
+        // the fragment contributes nothing and the camera shows through. Without premultiplying, the
+        // interior would add lineColor to the background and saturate to white.
+        material.baseColor = vec4(materialParams.lineColor * edge, edge);
+    }
+}

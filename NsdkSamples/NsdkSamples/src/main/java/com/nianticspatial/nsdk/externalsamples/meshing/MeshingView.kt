@@ -106,8 +106,8 @@ fun MeshingView(context: Context, nsdkSessionManager: NSDKSessionManager, helpCo
             coroutineScope.cancel()
             lifecycleOwner.lifecycle.removeObserver(meshingManager)
             meshingManager.onDestroy(lifecycleOwner)
-            // Destroys all MeshNodes (entities + VBs/IBs via SceneView) and all tracked
-            // MaterialInstances before MaterialLoader tears down the parent Material.
+            // Destroys all MeshNodes and the Filament resources they own (vertex/index buffers,
+            // MaterialInstances, Textures) before MaterialLoader tears down the parent Material.
             meshRenderer.destroy()
             // Destroy the root anchor node itself. Children are already detached by
             // meshRenderer.destroy(), so destroyRecursively just destroys the root entity.

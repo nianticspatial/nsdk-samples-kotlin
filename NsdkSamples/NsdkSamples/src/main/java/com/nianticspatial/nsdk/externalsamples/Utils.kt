@@ -40,7 +40,7 @@ class Utils {
             if (!hasCameraPermissions(activity) || !hasLocationPermissions(activity)) {
                 Toast.makeText(
                     activity,
-                    "Camera, storage and location permissions are needed to run this application",
+                    "Camera and location permissions are needed to run this application",
                     Toast.LENGTH_SHORT
                 ).show()
                 if (!ActivityCompat.shouldShowRequestPermissionRationale(
@@ -49,9 +49,6 @@ class Utils {
                     ) || ActivityCompat.shouldShowRequestPermissionRationale(
                         activity,
                         Manifest.permission.ACCESS_FINE_LOCATION
-                    ) || ActivityCompat.shouldShowRequestPermissionRationale(
-                        activity,
-                        Manifest.permission.WRITE_EXTERNAL_STORAGE
                     )
                 ) {
                     val intent = Intent()
