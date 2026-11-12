@@ -3,6 +3,7 @@ package com.nianticspatial.nsdk.externalsamples
 
 import android.app.Activity
 import android.hardware.display.DisplayManager
+import android.util.Log
 import android.view.Display
 import android.view.Surface
 import androidx.compose.runtime.getValue
@@ -10,11 +11,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
+import com.google.ar.core.Config
 import com.google.ar.core.Frame
 import com.google.ar.core.Session
 import com.nianticspatial.nsdk.NsdkFrame
 import com.nianticspatial.nsdk.Orientation
-import com.nianticspatial.nsdk.playback.AssetPlaybackDatasetLoader
 import com.nianticspatial.nsdk.playback.PlaybackDataset
 import com.nianticspatial.nsdk.playback.PlaybackFrame
 import com.nianticspatial.nsdk.playback.PlaybackSession
@@ -31,7 +32,8 @@ import kotlinx.coroutines.withContext
 enum class SessionMode { LIVE, PLAYBACK }
 
 /**
- * Manages the active AR session — either live (ARCore) or playback (pre-recorded dataset).
+ * Manages the active AR session — either live (ARCore) or playback of a dataset passed to
+ * [setPlaybackDataset].
  *
  * Drives the unified frame pipeline: [updateFrame] is called by ARSceneView each live frame,
  * and [PlaybackSession] delivers playback frames via its frame listener. Both paths notify
@@ -43,25 +45,40 @@ enum class SessionMode { LIVE, PLAYBACK }
  */
 class ARSessionManager(
     private val activity: Activity,
-    playbackDatasetPath: String = ""
+    private val usePlatformDepth: Boolean = true
 ) : DefaultLifecycleObserver {
+
+    companion object {
+        private const val TAG = "ARSessionManager"
+    }
 
     /** Whether the AR/playback view is currently active. False while on the feature selector. */
     var active: Boolean by mutableStateOf(false)
         private set
 
-    /** Current session mode. Starts as [SessionMode.LIVE]; switches to [SessionMode.PLAYBACK] when a dataset path is provided. */
+    /** Current session mode. Starts as [SessionMode.LIVE]; switches to [SessionMode.PLAYBACK] when [setPlaybackDataset] gets a dataset. */
     var mode: SessionMode by mutableStateOf(SessionMode.LIVE)
         private set
+
+    /** True when running against a playback dataset rather than the live camera. */
+    val isPlayback: Boolean get() = mode == SessionMode.PLAYBACK
 
     private var session: Session? = null
     private var playbackSession: PlaybackSession? = null
 
-    /** True while the playback dataset is being loaded from assets in the background. */
-    var isPlaybackLoading: Boolean by mutableStateOf(false)
+    /**
+     * True while ARCore Depth API support is probed in the background. Wait for this to become
+     * false before creating the NSDK session so [depthAvailability] is settled.
+     */
+    var isLoading: Boolean by mutableStateOf(false)
         private set
 
-    /** True when the current dataset includes depth data. Always false in live mode. */
+    /**
+     * True when platform depth is enabled ([usePlatformDepth]) and available: the playback
+     * dataset includes depth data, or (in live mode) the device supports the ARCore Depth API.
+     * The NSDK session takes the live probe's value at creation; a scan opened later does not
+     * change the session.
+     */
     var depthAvailability: Boolean by mutableStateOf(false)
         private set
 
@@ -75,6 +92,11 @@ class ARSessionManager(
 
     /** Most recent playback frame, set by the [PlaybackSession] frame listener. Null until playback begins. */
     var currentPlaybackFrame: PlaybackFrame? by mutableStateOf(null)
+        private set
+
+    /** The active playback dataset, or null in live mode. Lets callers read its recorded
+     *  metadata (e.g. location) without playback having streamed a frame yet. */
+    var playbackDataset: PlaybackDataset? = null
         private set
 
     /**
@@ -112,23 +134,33 @@ class ARSessionManager(
         val displayManager = activity.getSystemService(Activity.DISPLAY_SERVICE) as DisplayManager
         displayManager.registerDisplayListener(displayListener, null)
         updateDisplayRotation()
+        probeLiveDepthSupport()
+    }
 
-        // When a playback path is set, start in PLAYBACK so ARCore is not used. Load on background; if load fails, switch to LIVE.
-        if (playbackDatasetPath.isNotEmpty()) {
-            mode = SessionMode.PLAYBACK
-            isPlaybackLoading = true
-            val path = playbackDatasetPath
-            val act = activity
-            playbackScope.launch {
-                val dataset = AssetPlaybackDatasetLoader(act, path).loadDataset()
-                withContext(Dispatchers.Main.immediate) {
-                    if (!act.isFinishing && !act.isDestroyed && dataset != null) {
-                        setPlaybackDataset(dataset)
-                    } else {
-                        mode = SessionMode.LIVE
-                    }
-                    isPlaybackLoading = false
+    /**
+     * Checks once whether this device supports the ARCore Depth API, so the NSDK session can be
+     * created with platform depth enabled (`useLidar`). Uses a short-lived probe [Session] that
+     * is closed before ARSceneView creates the real one — [isLoading] gates the UI until then.
+     */
+    private fun probeLiveDepthSupport() {
+        if (!usePlatformDepth) return
+        isLoading = true
+        val act = activity
+        playbackScope.launch {
+            val supported = try {
+                val probeSession = Session(act)
+                try {
+                    probeSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)
+                } finally {
+                    probeSession.close()
                 }
+            } catch (e: Exception) {
+                Log.w(TAG, "ARCore depth support probe failed; platform depth disabled", e)
+                false
+            }
+            withContext(Dispatchers.Main.immediate) {
+                depthAvailability = supported
+                isLoading = false
             }
         }
     }
@@ -171,14 +203,16 @@ class ARSessionManager(
     }
 
     /**
-     * Switch to playback mode and load [dataset]. Creates a [PlaybackSession] but does not start
-     * it; playback begins when [setEnabled] is called with `true`. Pass `null` to tear down the
-     * current dataset and revert to live mode.
+     * Switch to playback mode and load [dataset], taking ownership of it and closing the previous
+     * one. Creates a [PlaybackSession] and plays it if [active]; otherwise [setEnabled] starts it.
+     * Pass `null` to revert to live mode. Call from the main thread.
      */
-    private fun setPlaybackDataset(dataset: PlaybackDataset?) {
+    fun setPlaybackDataset(dataset: PlaybackDataset?) {
         playbackSession?.dispose()
         playbackSession = null
         currentPlaybackFrame = null
+        playbackDataset?.close()
+        playbackDataset = dataset
 
         if (dataset == null) {
             mode = SessionMode.LIVE
@@ -187,7 +221,7 @@ class ARSessionManager(
         }
 
         mode = SessionMode.PLAYBACK
-        depthAvailability = dataset.hasDepth()
+        depthAvailability = usePlatformDepth && dataset.hasDepth()
 
         playbackSession = PlaybackSession(dataset)
         playbackSession?.setOnFrameListener { frame ->
@@ -207,8 +241,13 @@ class ARSessionManager(
         }
     }
 
-    /** Reads the current display rotation and updates [deviceOrientation]. */
-    private fun updateDisplayRotation() {
+    /**
+     * Reads the current display rotation and updates [deviceOrientation].
+     * The display listener updates this automatically in live mode. Call this explicitly
+     * in playback mode when the viewport changes (e.g. device rotation) to ensure all
+     * orientation-dependent features stay in sync.
+     */
+    fun updateDisplayRotation() {
         val display: Display = activity.windowManager.defaultDisplay
         deviceOrientation = when (display.rotation) {
             Surface.ROTATION_0 -> Orientation.PORTRAIT
@@ -228,5 +267,7 @@ class ARSessionManager(
         playbackSession?.dispose()
         playbackSession = null
         currentPlaybackFrame = null
+        playbackDataset?.close()
+        playbackDataset = null
     }
 }

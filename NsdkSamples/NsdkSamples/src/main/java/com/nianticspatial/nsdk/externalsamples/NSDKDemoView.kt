@@ -5,9 +5,13 @@ import android.app.Activity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
@@ -29,9 +33,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import com.nianticspatial.nsdk.NSDKSession
@@ -49,6 +55,12 @@ import com.nianticspatial.nsdk.externalsamples.mapping.DeviceMappingRoute
 import com.nianticspatial.nsdk.externalsamples.mapping.DeviceMappingView
 import com.nianticspatial.nsdk.externalsamples.occlusion.OcclusionRoute
 import com.nianticspatial.nsdk.externalsamples.occlusion.OcclusionView
+import com.nianticspatial.nsdk.externalsamples.playbackselect.DownloadedPlaybacksRoute
+import com.nianticspatial.nsdk.externalsamples.playbackselect.DownloadedPlaybacksView
+import com.nianticspatial.nsdk.externalsamples.playbackselect.PlaybackBanner
+import com.nianticspatial.nsdk.externalsamples.playbackselect.PlaybackLibrary
+import com.nianticspatial.nsdk.externalsamples.playbackselect.PlaybackSelectRoute
+import com.nianticspatial.nsdk.externalsamples.playbackselect.PlaybackSelectView
 import com.nianticspatial.nsdk.externalsamples.scenesegmentation.SceneSegmentationRoute
 import com.nianticspatial.nsdk.externalsamples.scenesegmentation.SceneSegmentationView
 import com.nianticspatial.nsdk.externalsamples.sites.SitesRoute
@@ -58,9 +70,13 @@ import com.nianticspatial.nsdk.externalsamples.vps2.VPS2View
 
 private const val TAG = "NSDKDemoView"
 
-// Paste the name of your playback dataset here to enable playback mode (e.g. "playback/MyDataset").
-// Leave empty to use live AR mode instead.
-private const val PLAYBACK_DATASET_PATH = "playback/PUT_DATASET_NAME_HERE"
+// When true and the device supports the ARCore Depth API, NSDK uses platform depth instead of
+// running the neural depth model on-device. The session fixes this at creation from the live probe;
+// a scan opened later does not change it. Set to false to always use neural (Lightship) depth.
+//
+// Setting this to true may add a noticeable latency (~100 ms) to the AR camera view due to
+// the overhead of ARCore's depth estimation.
+private const val USE_PLATFORM_DEPTH = false
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -69,7 +85,7 @@ fun NSDKDemoView(modifier: Modifier = Modifier, activity: Activity) {
     val sessionManager = remember {
         ARSessionManager(
             activity = activity,
-            playbackDatasetPath = PLAYBACK_DATASET_PATH
+            usePlatformDepth = USE_PLATFORM_DEPTH
         )
     }
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -82,12 +98,13 @@ fun NSDKDemoView(modifier: Modifier = Modifier, activity: Activity) {
         }
     }
 
-    // Wait for the playback dataset to finish loading before creating the session.
-    // In live mode, isPlaybackLoading is always false so this is a no-op.
-    val isPlaybackLoading = sessionManager.isPlaybackLoading
-    if (isPlaybackLoading) return
+    // Wait for the ARCore depth support probe so depthAvailability is final when the NSDK session
+    // is created below.
+    val isLoading = sessionManager.isLoading
+    if (isLoading) return
 
-    val depthAvailability = sessionManager.depthAvailability
+    // Fixed at session creation; a later playback switch does not recreate the session.
+    val depthAvailability = remember { sessionManager.depthAvailability }
     val nsdkSession = remember(depthAvailability) {
         NSDKSession(
             accessToken = AuthConstants.accessToken,
@@ -96,7 +113,7 @@ fun NSDKDemoView(modifier: Modifier = Modifier, activity: Activity) {
     }
 
     val nsdkSessionManager = remember(nsdkSession, sessionManager) {
-        NSDKSessionManager(activity, nsdkSession, sessionManager)
+        NSDKSessionManager(activity, nsdkSession, sessionManager, captureDepth = depthAvailability)
     }
 
     DisposableEffect(lifecycleOwner, nsdkSessionManager) {
@@ -104,6 +121,13 @@ fun NSDKDemoView(modifier: Modifier = Modifier, activity: Activity) {
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(nsdkSessionManager)
         }
+    }
+
+    val playbackLibrary = remember(nsdkSession) {
+        PlaybackLibrary(nsdkSession.playbackCache, sessionManager)
+    }
+    DisposableEffect(playbackLibrary) {
+        onDispose { playbackLibrary.close() }
     }
 
     val authManager = remember(nsdkSession) { AuthManager(nsdkSession) }
@@ -168,7 +192,23 @@ fun NSDKDemoView(modifier: Modifier = Modifier, activity: Activity) {
             composable<VPS2Route> { backStackEntry ->
                 val args = backStackEntry.toRoute<VPS2Route>()
                 BackHelpScaffold(navController) { helpContentState ->
-                    VPS2View(activity, nsdkSessionManager, helpContentState, args.payload)
+                    VPS2View(
+                        activity,
+                        nsdkSessionManager,
+                        helpContentState,
+                        args.payload,
+                        vpsMapAssetId = args.vpsMapAssetId,
+                        allAssets = args.allAssets,
+                        siteId = args.siteId,
+                        useSiteLocalization = args.useSiteLocalization,
+                        useNearbySites = args.useNearbySites,
+                        // The site's coordinate serves both the nearby-sites query and, as a
+                        // fallback when there's no GPS fix, the mesh download's chunk ordering.
+                        siteLatitude = args.latitude,
+                        siteLongitude = args.longitude,
+                        nearbyLatitude = args.latitude,
+                        nearbyLongitude = args.longitude,
+                    )
                 }
             }
 
@@ -208,13 +248,50 @@ fun NSDKDemoView(modifier: Modifier = Modifier, activity: Activity) {
                 }
             }
 
+            composable<PlaybackSelectRoute> { _ ->
+                BackHelpScaffold(navController) { helpContentState ->
+                    PlaybackSelectView(nsdkSession, playbackLibrary, helpContentState) {
+                        navController.navigate(DownloadedPlaybacksRoute)
+                    }
+                }
+            }
+
+            composable<DownloadedPlaybacksRoute> { _ ->
+                BackHelpScaffold(navController) { helpContentState ->
+                    DownloadedPlaybacksView(nsdkSession, playbackLibrary, helpContentState)
+                }
+            }
+
             composable<SitesRoute> { backStackEntry ->
                 BackHelpScaffold(navController) { helpContentState ->
                     SitesView(nsdkSessionManager, navHostController = navController, helpContentState)
                 }
             }
 
+            // Samples contributed at runtime via SampleRegistry (empty by default).
+            SampleRegistry.entries.forEach { entry ->
+                composable(entry.routeId) {
+                    BackHelpScaffold(navController) { _ ->
+                        entry.content(nsdkSessionManager)
+                    }
+                }
+            }
         }
     }
-    ARSceneView(modifier = Modifier.fillMaxSize(), sessionManager = sessionManager, content = navContent)
+    // The playback banner takes the status bar inset from the screens below it while shown.
+    val bannerInsets = if (playbackLibrary.activeScan != null) WindowInsets.statusBars else WindowInsets(0)
+    // Only menu screens switch the playback source; feature views run on the current one.
+    val destination = navController.currentBackStackEntryAsState().value?.destination
+    val showPlaybackStop = destination == null ||
+        destination.hasRoute(SelectorRoute::class) ||
+        destination.hasRoute(PlaybackSelectRoute::class) ||
+        destination.hasRoute(DownloadedPlaybacksRoute::class)
+    ARSceneView(modifier = Modifier.fillMaxSize(), sessionManager = sessionManager, nsdkSessionManager = nsdkSessionManager) { overlayContentState ->
+        Column(modifier = Modifier.fillMaxSize()) {
+            PlaybackBanner(playbackLibrary, showPlaybackStop)
+            Box(modifier = Modifier.weight(1f).consumeWindowInsets(bannerInsets)) {
+                navContent(overlayContentState)
+            }
+        }
+    }
 }

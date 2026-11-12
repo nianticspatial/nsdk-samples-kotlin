@@ -66,7 +66,7 @@ fun CaptureView(
         onDispose { nsdkManager.arManager.setEnabled(false) }
     }
 
-    val captureOverlayContent = remember(captureManager) { CaptureOverlayContent(captureManager) }
+    val captureOverlayContent = remember(captureManager) { CaptureOverlayContent(captureManager, nsdkManager) }
     DisposableEffect(captureOverlayContent) {
         overlayContentState.value = captureOverlayContent
         onDispose {

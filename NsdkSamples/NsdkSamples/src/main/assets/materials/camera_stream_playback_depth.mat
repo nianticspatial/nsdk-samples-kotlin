@@ -1,0 +1,44 @@
+material {
+    name : "CameraStreamPlaybackDepth",
+    shadingModel : unlit,
+    blending : opaque,
+    vertexDomain : device,
+    culling : none,
+    parameters : [
+        { type : sampler2d, name : cameraTexture     },
+        { type : mat3,      name : cameraUvTransform },
+        { type : sampler2d, name : depthTexture      },
+        { type : mat3,      name : depthUvTransform  },
+        { type : bool,      name : depthActive       }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        float w = getResolution().x;
+        float h = getResolution().y;
+        vec2 screenUV = vec2(gl_FragCoord.x / w, gl_FragCoord.y / h);
+
+        // Camera image with display-orientation correction
+        vec3 camUvh = vec3(screenUV, 1.0);
+        vec3 transformedCamUvh = camUvh * materialParams.cameraUvTransform;
+        vec2 cameraUV = transformedCamUvh.xy / transformedCamUvh.z;
+        vec3 camColor = texture(materialParams_cameraTexture, cameraUV).rgb;
+        material.baseColor = vec4(inverseTonemapSRGB(camColor), 1.0);
+
+        // NSDK depth → gl_FragDepth
+        vec3 uvh = vec3(screenUV, 1.0);
+        vec3 transformedUvh = uvh * materialParams.depthUvTransform;
+        vec2 depthUV = transformedUvh.xy / transformedUvh.z;
+        float depth_m = texture(materialParams_depthTexture, depthUV).r;
+        if (materialParams.depthActive) {
+            float d = (depth_m > 0.0) ? depth_m : 100.0;
+            vec4 clipPos = getClipFromViewMatrix() * vec4(0.0, 0.0, -d, 1.0);
+            gl_FragDepth = max(clipPos.z / clipPos.w, 0.0001);
+        } else {
+            gl_FragDepth = 0.0001;
+        }
+    }
+}

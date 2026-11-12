@@ -20,7 +20,7 @@ dependencyResolutionManagement {
         mavenCentral()
         // NSDK Maven repository (hosted on GitHub)
         maven {
-            url = uri("https://raw.githubusercontent.com/nianticspatial/nsdk-library-aar/main")
+            url = uri("https://raw.githubusercontent.com/nianticspatial/nsdk-library-aar/4.5.0-26110800")
         }
     }
 }

@@ -182,8 +182,8 @@ fun DeviceMappingView(context: Activity, nsdkSessionManager: NSDKSessionManager,
             it.destroy()
         }
         pointCloudPoseNode = null
-
-        clearChildNodes()
+        // Do NOT call clearChildNodes() — that wipes arChildNodes entirely, including
+        // infrastructure nodes like PlaybackNsdkCameraStream.backgroundNode.
     }
 
     fun visualizeMapPoints(anchorTransform: FloatArray) {
@@ -328,9 +328,8 @@ fun DeviceMappingView(context: Activity, nsdkSessionManager: NSDKSessionManager,
 
             // Destroy material instance before the material itself is destroyed
             engine.safeDestroyMaterialInstance(pointMaterialInstance)
-
-            // Clear remaining child nodes
-            clearChildNodes()
+            // Do NOT call clearChildNodes() here — it would wipe arChildNodes entirely,
+            // removing infrastructure nodes like PlaybackNsdkCameraStream.backgroundNode.
         }
     }
 

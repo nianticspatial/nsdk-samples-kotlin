@@ -25,7 +25,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -40,12 +45,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.gestures.detectTapGestures
+import com.google.android.filament.MaterialInstance
 import com.nianticspatial.nsdk.AnchorTrackingState
 import com.nianticspatial.nsdk.UUIDKey
 import com.nianticspatial.nsdk.externalsamples.BuildConfig
@@ -57,16 +65,39 @@ import com.nianticspatial.nsdk.externalsamples.LocalSceneMaterialLoader
 import com.nianticspatial.nsdk.externalsamples.arChildNodes
 import com.nianticspatial.nsdk.externalsamples.createUnlitColorMaterial
 import com.nianticspatial.nsdk.externalsamples.destroyRecursively
+import com.nianticspatial.nsdk.externalsamples.vps2debugger.VpsDebuggerEventBuffer
+import com.nianticspatial.nsdk.externalsamples.vps2debugger.VpsDebuggerWebBridge
+import com.nianticspatial.nsdk.externalsamples.vps2debugger.VpsDebuggerWebView
+import com.nianticspatial.nsdk.externalsamples.sites.deploymentLabel
 import com.nianticspatial.nsdk.vps2.Vps2TrackingState
 import dev.romainguy.kotlin.math.Float3
 import dev.romainguy.kotlin.math.Float4
 import dev.romainguy.kotlin.math.Mat4
 import io.github.sceneview.ar.node.PoseNode
 import io.github.sceneview.node.CubeNode
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.delay
 import java.util.Locale
 import com.nianticspatial.nsdk.GeolocationData
+
+/**
+ * The panel occupying the band between the AR view and the VPS2 controls. Only one fits on screen,
+ * so the sample offers them as a single choice instead of one toggle each.
+ *
+ * @param label How the panel is named in the selector.
+ */
+private enum class VPS2Panel(val label: String) {
+    NONE("None"),
+    COMPASS("Compass"),
+    MAP("Map"),
+    DEBUGGER("Debugger"),
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -74,15 +105,47 @@ fun VPS2View(
     context: Context,
     nsdkManager: NSDKSessionManager,
     helpContentState: MutableState<HelpContent?>,
-    initialPayload: String?
+    initialPayload: String?,
+    vpsMapAssetId: String? = null,
+    allAssets: Boolean = false,
+    siteId: String? = null,
+    siteLatitude: Double = 0.0,
+    siteLongitude: Double = 0.0,
+    useSiteLocalization: Boolean = false,
+    useNearbySites: Boolean = false,
+    nearbyLatitude: Double = 0.0,
+    nearbyLongitude: Double = 0.0,
 ) {
     val engine = LocalSceneEngine.current
     val materialLoader = LocalSceneMaterialLoader.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    val meshRenderer = remember { MeshRenderer(engine, materialLoader) }
+    // Downloaded meshes without a texture are drawn as a wireframe so the camera passthrough stays
+    // visible through them, which is what makes it possible to judge mesh alignment.
+    val meshRenderer = remember {
+        MeshRenderer(engine, materialLoader, wireframeWhenUntextured = true)
+    }
+    val vps2Session = remember { nsdkManager.session.vps2.acquire() }
+    val debuggerScope = remember { CoroutineScope(Dispatchers.Main + SupervisorJob()) }
+    val eventBuffer = remember { VpsDebuggerEventBuffer() }
+    val webBridge = remember { VpsDebuggerWebBridge(eventBuffer, debuggerScope) }
+    // The compass, the mini-map and the debugger all want the band above the controls and only one
+    // fits, so a single selector picks between them rather than a toggle per panel. Starts on None:
+    // every panel is fed by the localization callback, so before tracking runs they would all just
+    // report zeros over the AR view.
+    var selectedPanel by remember { mutableStateOf(VPS2Panel.NONE) }
+    var panelMenuExpanded by remember { mutableStateOf(false) }
+    val showDebuggerWebView = selectedPanel == VPS2Panel.DEBUGGER
     val vps2Manager = remember {
-        VPS2Manager(nsdkManager, nsdkManager.session.vps2.acquire()).apply {
+        VPS2Manager(
+            nsdkManager,
+            vps2Session,
+            vpsMapAssetId = vpsMapAssetId,
+            allAssets = allAssets,
+            siteId = siteId,
+            siteLatitude = siteLatitude,
+            siteLongitude = siteLongitude,
+        ).apply {
             // Set callback: manager decides what to render, view just calls the renderer
             onMeshDataReady = { chunks, meshIds ->
                 meshRenderer.updateMeshChunks(chunks, meshIds)
@@ -100,11 +163,61 @@ fun VPS2View(
     DisposableEffect(Unit) {
         helpContentState.value = {
             Text(
-                text = "VPS2 Sample Help\n\nThis sample shows the VPS2 flow.\nTO USE:\n Begin by pressing the" +
-                    " \"Start Tracking\" button to start tracking VPS2 anchors.\n Once anchors are tracked, " +
-                    "cubes will appear at their locations. Orange cubes indicate coarse localization, " +
-                    "green cubes indicate refined localization.\n Meshes will be automatically downloaded " +
-                    "and displayed when anchors are successfully tracked in refined mode.",
+                text = if (useNearbySites)
+                    "VPS2 Sample Help\n\nThis sample localizes to whatever VPS sites are near you, " +
+                        "with no site selection.\nTO USE:\n Press \"Start Tracking\". The SDK looks " +
+                        "up every site holding VPS assets within the default 100m radius of the " +
+                        "location captured when you entered this screen, and localizes against all " +
+                        "of their assets.\n Once a localization lands, the panel at the top-left " +
+                        "names the site and asset that matched, and that asset's mesh is downloaded " +
+                        "and drawn.\n The mesh stays in place while the camera is tracking, and " +
+                        "hides only if AR tracking is lost.\n " +
+                        "Tap anywhere to drop your own anchor, which renders as a cube.\n\n" +
+                        "Use \"Show Debugger\" to open the hosted VPS debugger viewer overlay while " +
+                        "AR keeps running.\n\n" +
+                        "Once any localization lands, a mini-map appears at the bottom — tap \"Show Map\" to view it. Dropping a marker still needs precise (green) localization. Tap " +
+                        "the map to drop a colored marker at that spot — it shows both on the map and " +
+                        "as a matching cube in AR." +
+                        "\n\nLong-press to geotag the spot 2m in front of the camera: VPS2 converts that " +
+                        "pose to a latitude and longitude, which drops a marker on the map and a " +
+                        "matching cube in AR."
+                else if (useSiteLocalization)
+                    "VPS2 Sample Help\n\nThis sample localizes to a site by its site ID.\nTO USE:\n " +
+                        "Enter (or confirm) a site ID in the field at the top, and optionally the " +
+                        "ID of one of its VPS assets, then press \"Start Tracking\". Picking an " +
+                        "asset in the Sites browser fills both in for you.\n With an asset ID the " +
+                        "SDK localizes against that asset, whatever its deployment; without one, " +
+                        "against every production VPS asset in the site. While tracking, " +
+                        "\"Switch Asset\" moves to another VPS asset of the site, and \"Stop " +
+                        "Tracking\" stops localizing to it.\n Watch the quality indicator in the " +
+                        "top-right corner: " +
+                        "red means no localization, yellow coarse, green precise. The panels at the " +
+                        "bottom show the VPS2 and device geolocations once a fix lands.\n Once a " +
+                        "localization lands, the panel at the top-left names the site and asset " +
+                        "that matched, and that asset's mesh is downloaded and drawn. The mesh " +
+                        "stays in place while the camera is tracking, and hides only if AR " +
+                        "tracking is lost.\n Tap anywhere to drop your own anchor " +
+                        "1m in front of the camera and render it as as a cube.\n\n" +
+                        "Use \"Show Debugger\" to open the hosted VPS debugger viewer overlay while " +
+                        "AR keeps running.\n\n" +
+                        "Once any localization lands, a mini-map appears at the bottom — tap \"Show Map\" to view it. Dropping a marker still needs precise (green) localization. Tap " +
+                        "the map to drop a colored marker at that spot — it shows both on the map and " +
+                        "as a matching cube in AR." +
+                        "\n\nLong-press to geotag the spot 2m in front of the camera: VPS2 converts that " +
+                        "pose to a latitude and longitude, which drops a marker on the map and a " +
+                        "matching cube in AR."
+                else
+                    "VPS2 Sample Help\n\nThis sample shows the VPS2 flow.\nTO USE:\n Begin by pressing the" +
+                        " \"Start Tracking\" button to start tracking VPS2 anchors.\n Once anchors are tracked, " +
+                        "cubes will appear at their locations. Orange cubes indicate coarse localization, " +
+                        "green cubes indicate refined localization.\n Meshes will be automatically downloaded " +
+                        "and displayed when anchors are successfully tracked in refined mode.\n\n" +
+                        "Use \"Show Debugger\" to open the hosted VPS debugger viewer overlay while AR keeps running.\n\n" +
+                        "Once any localization lands, a mini-map appears at the bottom — tap \"Show Map\" to view it. Dropping a marker still needs precise (green) localization. Tap the map to " +
+                        "drop a colored marker at that spot — it shows both on the map and as a matching cube in AR." +
+                        "\n\nLong-press to geotag the spot 2m in front of the camera: VPS2 converts that " +
+                        "pose to a latitude and longitude, which drops a marker on the map and a " +
+                        "matching cube in AR.",
                 color = Color.White
             )
         }
@@ -120,16 +233,15 @@ fun VPS2View(
         }
     }
 
-    // Map of location name to VPS2 anchor payload.
-    // If you have set DEFALT VPS PAYLOAD in BuildConfig, it will be one of the localization targets.
-    val payloadOptions =
-        if (BuildConfig.DEFAULT_VPS_PAYLOAD == "YOUR_PAYLOAD")
-            mapOf()
-        else
-            mapOf(
-                "Default Location" to BuildConfig.DEFAULT_VPS_PAYLOAD
-            )
-    val payloadToName = remember(payloadOptions) { payloadOptions.entries.associate { it.value to it.key } }
+    // Site to localize to, editable in-app. Prefilled from the site picked in the sites browser, or
+    // from DEFAULT_SITE_ID in BuildConfig when one has been set locally.
+    var siteIdInput by remember {
+        mutableStateOf(siteId ?: BuildConfig.DEFAULT_SITE_ID.takeIf { it != "YOUR_SITE_ID" } ?: "")
+    }
+    // VPS map asset of that site to localize to, also editable. Prefilled from the asset picked in
+    // the sites browser; left blank, the site's production assets are used.
+    var assetIdInput by remember { mutableStateOf(vpsMapAssetId.orEmpty()) }
+    var switchAssetMenuExpanded by remember { mutableStateOf(false) }
 
     // Load compass images
     val redCompass = remember {
@@ -157,6 +269,10 @@ fun VPS2View(
     // Track previous updateType for each anchor to detect changes
     val previousUpdateStates = remember { mutableMapOf<UUIDKey, AnchorTrackingState>() }
 
+    // Nodes + per-color materials for markers dropped by tapping the map, keyed for reuse/prune.
+    val placedMarkerNodeMap = remember { mutableMapOf<Long, PoseNode>() }
+    val placedMarkerMaterials = remember { mutableMapOf<Int, MaterialInstance>() }
+
     // Create root mesh node early so it's available when meshes are downloaded
     val rootMeshNode = remember {
         PoseNode(engine = engine).apply {
@@ -166,10 +282,10 @@ fun VPS2View(
 
     // Create materials for anchor cubes
     val refinedGreenMaterial = remember {
-        createUnlitColorMaterial(context, materialLoader, Color(0xFF42FF44))
+        createUnlitColorMaterial(context, materialLoader, VPS2ReservedColors.AnchorTracked)
     }
     val coarseOrangeMaterial = remember {
-        createUnlitColorMaterial(context, materialLoader, Color(0xFFFF8C00))
+        createUnlitColorMaterial(context, materialLoader, VPS2ReservedColors.AnchorLimited)
     }
 
     // Release the Filament material instances before the engine is torn down
@@ -179,15 +295,57 @@ fun VPS2View(
                 node.destroyRecursively(arChildNodes)
             }
             localAnchorNodeMap.clear()
+            // Destroys all mesh nodes (and the buffers, MaterialInstances and Textures they own)
+            // before MaterialLoader tears down the parent Material. Node.destroy() detaches each
+            // node from rootMeshNode, so the destroyRecursively below only frees the root itself.
+            meshRenderer.destroy()
             rootMeshNode.destroyRecursively(arChildNodes)
             engine.destroyMaterialInstance(refinedGreenMaterial)
             engine.destroyMaterialInstance(coarseOrangeMaterial)
+            placedMarkerNodeMap.values.forEach { it.destroyRecursively(arChildNodes) }
+            placedMarkerNodeMap.clear()
+            placedMarkerMaterials.values.forEach { engine.destroyMaterialInstance(it) }
+            placedMarkerMaterials.clear()
         }
     }
 
     LaunchedEffect(vps2Manager) {
         vps2Manager.toasts.collectLatest { message ->
             Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    LaunchedEffect(vps2Session, eventBuffer) {
+        vps2Session.debuggerEvents
+            .onEach { event ->
+                eventBuffer.add(event)
+                webBridge.onDebuggerEvent()
+            }
+            .launchIn(this)
+    }
+
+    LaunchedEffect(showDebuggerWebView) {
+        if (showDebuggerWebView) {
+            webBridge.show()
+        } else {
+            webBridge.hide()
+        }
+    }
+
+    // Every panel is fed by tracking, so drop back to None as soon as it stops. Keyed off the
+    // tracking state rather than the Stop button because tracking also stops on its own when
+    // startTracking fails.
+    LaunchedEffect(vps2Manager.trackingStarted) {
+        if (!vps2Manager.trackingStarted) {
+            selectedPanel = VPS2Panel.NONE
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            webBridge.hide()
+            eventBuffer.clear()
+            debuggerScope.cancel()
         }
     }
 
@@ -297,6 +455,69 @@ fun VPS2View(
         }
     }
 
+    // Create/reposition/prune AR cubes for markers placed by tapping the map. One node per marker
+    // id; a null transform (VPS2 has not resolved the coordinate yet) drops the cube until a pose
+    // comes back. Cube colors match the map dots via the shared per-color materials.
+    LaunchedEffect(vps2Manager, engine, materialLoader) {
+        androidx.compose.runtime.snapshotFlow { vps2Manager.placedMarkers }
+            .collectLatest { markers ->
+                val liveIds = markers.map { it.id }.toSet()
+                placedMarkerNodeMap.keys.filter { it !in liveIds }.forEach { id ->
+                    placedMarkerNodeMap.remove(id)?.destroyRecursively(arChildNodes)
+                }
+
+                markers.forEach { marker ->
+                    val matrix = marker.transform
+                    if (matrix == null) {
+                        placedMarkerNodeMap.remove(marker.id)?.destroyRecursively(arChildNodes)
+                        return@forEach
+                    }
+
+                    val node = placedMarkerNodeMap[marker.id] ?: run {
+                        val material = placedMarkerMaterials.getOrPut(marker.color.toArgb()) {
+                            createUnlitColorMaterial(context, materialLoader, marker.color)
+                        }
+                        PoseNode(engine = engine).apply {
+                            addChildNode(
+                                CubeNode(
+                                    engine = engine,
+                                    size = Float3(0.25f, 0.25f, 0.25f),
+                                    center = Float3(0f, 0f, 0f),
+                                    materialInstance = material,
+                                )
+                            )
+                            arChildNodes.add(this)
+                        }.also { placedMarkerNodeMap[marker.id] = it }
+                    }
+
+                    node.worldTransform = Mat4(
+                        Float4(matrix[0], matrix[1], matrix[2], matrix[3]),
+                        Float4(matrix[4], matrix[5], matrix[6], matrix[7]),
+                        Float4(matrix[8], matrix[9], matrix[10], matrix[11]),
+                        Float4(matrix[12], matrix[13], matrix[14], matrix[15]),
+                    )
+                }
+            }
+    }
+
+
+    // Place or hide every downloaded mesh chunk at once by moving their shared parent. Hiding
+    // keeps the built mesh, so it reappears as soon as tracking returns.
+    LaunchedEffect(vps2Manager) {
+        vps2Manager.meshRootPose.collect { matrix ->
+            if (matrix == null) {
+                rootMeshNode.isVisible = false
+                return@collect
+            }
+            rootMeshNode.worldTransform = Mat4(
+                Float4(matrix[0], matrix[1], matrix[2], matrix[3]),
+                Float4(matrix[4], matrix[5], matrix[6], matrix[7]),
+                Float4(matrix[8], matrix[9], matrix[10], matrix[11]),
+                Float4(matrix[12], matrix[13], matrix[14], matrix[15]),
+            )
+            rootMeshNode.isVisible = true
+        }
+    }
 
     // Poll for mesh processing needs and create mesh nodes
     LaunchedEffect(Unit) {
@@ -310,9 +531,24 @@ fun VPS2View(
 
     Box(modifier = Modifier
         .fillMaxSize()
-        .pointerInput(vps2Manager) {
-            detectTapGestures {
-                vps2Manager.createAnchor()
+        .pointerInput(vps2Manager, showDebuggerWebView) {
+            if (!showDebuggerWebView) {
+                detectTapGestures(
+                    onTap = { vps2Manager.createAnchor() },
+                    onLongPress = {
+                        val geolocation = vps2Manager.geotagInFront()
+                        val message = if (geolocation == null) {
+                            "Localize precisely (green) to geotag"
+                        } else {
+                            "Geotagged %.6f, %.6f (heading %.0f°)".format(
+                                geolocation.latitude,
+                                geolocation.longitude,
+                                geolocation.heading,
+                            )
+                        }
+                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                    },
+                )
             }
         }
     ) {
@@ -323,12 +559,41 @@ fun VPS2View(
             verticalArrangement = Arrangement.spacedBy(10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Intentionally no dropdown: we track all payloads in the map.
-            // (If a payload is provided via route, we include it too.)
-            if (!vps2Manager.trackingStarted && !initialPayload.isNullOrBlank()) {
+            if (useSiteLocalization && !vps2Manager.trackingStarted) {
+                val idFieldColors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White,
+                    focusedContainerColor = Color.Black.copy(alpha = 0.7f),
+                    unfocusedContainerColor = Color.Black.copy(alpha = 0.7f),
+                    focusedLabelColor = Color.White,
+                    unfocusedLabelColor = Color.LightGray,
+                )
+                OutlinedTextField(
+                    value = siteIdInput,
+                    onValueChange = { siteIdInput = it },
+                    label = { Text("Site ID") },
+                    singleLine = true,
+                    colors = idFieldColors,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                )
+                OutlinedTextField(
+                    value = assetIdInput,
+                    onValueChange = { assetIdInput = it },
+                    label = { Text("Asset ID (optional)") },
+                    singleLine = true,
+                    colors = idFieldColors,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                )
+            }
+            if (!vps2Manager.trackingStarted && !siteId.isNullOrBlank()) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Anchor payload obtained from Site",
+                    text = if (vpsMapAssetId.isNullOrBlank()) "Site ID obtained from Sites browser"
+                        else "Site and asset IDs obtained from Sites browser",
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(Color.DarkGray.copy(alpha = 0.5f))
@@ -338,129 +603,82 @@ fun VPS2View(
             }
         }
 
-        // Info box for tracked anchors
-        if (vps2Manager.trackingStarted && vps2Manager.anchors.isNotEmpty()) {
+        // Which site/asset the SDK actually localized against. Ids arrive with the localization;
+        // names land one portal round-trip later, so fall back to the id until then.
+        if ((useNearbySites || useSiteLocalization) && vps2Manager.trackingStarted) {
             Column(
                 modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(start = 8.dp, bottom = 140.dp)
-                    .fillMaxWidth(0.45f)
-                    .heightIn(max = 300.dp)
+                    .align(Alignment.TopStart)
+                    .statusBarsPadding()
+                    .padding(start = 8.dp, top = 8.dp)
+                    .fillMaxWidth(0.55f)
                     .background(Color.Black.copy(alpha = 0.7f))
-                    .padding(8.dp)
+                    .padding(8.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                Text(
-                    text = "Tracked Anchors (${vps2Manager.anchors.size}):",
-                    color = Color.White,
-                    fontSize = 12.sp,
-                    modifier = Modifier.padding(bottom = 4.dp)
-                )
-                LazyColumn {
-                    itemsIndexed(vps2Manager.anchors.keys.toList()) { index, anchorKey ->
-                        val state = vps2Manager.anchorStates[anchorKey] ?: AnchorTrackingState.NOT_TRACKED
-                        val payload = vps2Manager.anchors[anchorKey]
-                        val anchorName = payload?.let { payloadToName[it] } ?: "Anchor ${index + 1}"
-                        val stateColor = when (state) {
-                            AnchorTrackingState.TRACKED -> Color.Green
-                            AnchorTrackingState.LIMITED -> Color.Yellow
-                            AnchorTrackingState.NOT_TRACKED -> Color.Red
-                        }
-                        val geo: GeolocationData? = vps2Manager.anchorGeolocations[anchorKey]
-                        Column(modifier = Modifier.padding(vertical = 2.dp)) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .clip(CircleShape)
-                                        .background(stateColor)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "$anchorName - $state",
-                                    color = Color.White,
-                                    fontSize = 9.sp
-                                )
-                            }
-                            if (geo != null) {
-                                Text(
-                                    text = String.format(
-                                        Locale.US,
-                                        "  %.5f, %.5f, %.1f°",
-                                        geo.latitude,
-                                        geo.longitude,
-                                        geo.heading
-                                    ),
-                                    color = Color.LightGray,
-                                    fontSize = 8.sp,
-                                    modifier = Modifier.padding(start = 14.dp)
-                                )
-                            }
+                val siteId = vps2Manager.localizedSiteId
+                if (siteId == null) {
+                    Text(
+                        text = if (useNearbySites) "Searching nearby sites…" else "Localizing to site…",
+                        color = Color.LightGray,
+                        fontSize = 11.sp,
+                    )
+                } else {
+                    // Heading and detail color track the live localization confidence, so moving
+                    // away from the map (confidence drops to COARSE) no longer leaves the panel
+                    // asserting a precise "Localized to:" fix. Mirrors the indicator circle's
+                    // state → color mapping.
+                    val (statusLabel, statusColor) = when (vps2Manager.localizationTrackingState) {
+                        Vps2TrackingState.PRECISE -> "Localized to:" to Color.Green
+                        Vps2TrackingState.COARSE -> "Low confidence — near:" to Color.Yellow
+                        Vps2TrackingState.UNAVAILABLE -> "Localization lost — last seen:" to Color.Red
+                    }
+                    Text(
+                        text = statusLabel,
+                        color = Color.White,
+                        fontSize = 11.sp,
+                    )
+                    Text(
+                        text = "Site: ${vps2Manager.localizedSiteName ?: siteId}",
+                        color = statusColor,
+                        fontSize = 10.sp,
+                    )
+                    // The area count is only worth saying when the asset is split; one area is
+                    // the ordinary case and would be noise beside every asset.
+                    val areaCount = vps2Manager.localizedAssetAreaCount
+                    val areaSuffix = if (areaCount != null && areaCount > 1) " ($areaCount areas)" else ""
+                    Text(
+                        text = "Asset: ${vps2Manager.localizedAssetName ?: vps2Manager.localizedAssetId}$areaSuffix",
+                        color = statusColor,
+                        fontSize = 10.sp,
+                    )
+                    // Areas have no names in the portal, so the id is what there is to show. The
+                    // first is the area the device is in.
+                    val meshAreaIds = vps2Manager.meshAreaIds
+                    if (meshAreaIds.isNotEmpty()) {
+                        Text(
+                            text = "Mesh areas:",
+                            color = statusColor,
+                            fontSize = 10.sp,
+                        )
+                        meshAreaIds.forEachIndexed { index, areaId ->
+                            Text(
+                                text = if (index == 0) "  $areaId (current)" else "  $areaId",
+                                color = statusColor,
+                                fontSize = 10.sp,
+                            )
                         }
                     }
                 }
             }
         }
 
-        // Compass like WPS sample, plus lat/lng from latest localization conversion (bottom-end)
-        if (vps2Manager.trackingStarted) {
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 8.dp, bottom = 140.dp)
-                    .fillMaxWidth(0.45f)
-                    .heightIn(max = 300.dp)
-                    .background(Color.Black.copy(alpha = 0.7f))
-                    .padding(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    text = String.format(
-                        Locale.US,
-                        "VPS2 - Lat: %.6f, Lng: %.6f, Heading: %.1f",
-                        vps2Manager.vps2Latitude,
-                        vps2Manager.vps2Longitude,
-                        vps2Manager.vps2HeadingDeg,
-                    ),
-                    color = Color.White,
-                    fontSize = 9.sp,
-                )
-
-                redCompass?.let {
-                    Image(
-                        bitmap = it,
-                        contentDescription = "VPS2 Compass",
-                        modifier = Modifier
-                            .size(90.dp)
-                            .rotate(-vps2Manager.vps2HeadingDeg.toFloat())
-                    )
-                }
-
-                Text(
-                    text = String.format(
-                        Locale.US,
-                        "Device - Lat: %.6f, Lng: %.6f, Heading: %.1f",
-                        vps2Manager.gpsLatitude,
-                        vps2Manager.gpsLongitude,
-                        vps2Manager.deviceHeadingDeg,
-                    ),
-                    color = Color.White,
-                    fontSize = 9.sp,
-                )
-
-                blueCompass?.let {
-                    Image(
-                        bitmap = it,
-                        contentDescription = "Device Compass",
-                        modifier = Modifier
-                            .size(90.dp)
-                            .rotate(-vps2Manager.deviceHeadingDeg.toFloat())
-                    )
-                }
-            }
-        }
+        // The map needs a localization to centre on, so it falls back to the compass until one
+        // lands, even when the map is the selected panel.
+        val hasUserLocation = vps2Manager.vps2Latitude != 0.0 || vps2Manager.vps2Longitude != 0.0
+        val showMapView = selectedPanel == VPS2Panel.MAP && hasUserLocation
+        val showCompassView = selectedPanel == VPS2Panel.COMPASS ||
+            (selectedPanel == VPS2Panel.MAP && !hasUserLocation)
 
         // Localization quality indicator circle is tied to the localization tracking state:
         // - UNAVAILABLE -> Red
@@ -482,30 +700,367 @@ fun VPS2View(
                 .background(indicatorColor)
         )
 
-        // Start/Stop VPS2 button
+        // Everything pinned to the bottom of the screen lives in this column, so a panel can
+        // never end up on top of the buttons: the column hands the buttons their measured height
+        // and the panel above takes what is left. The panels used to be positioned individually
+        // against a hand-tuned clearance constant, which could not account for the 'Clear' button
+        // appearing once an anchor exists and so let the map slide under it (NSDK-8967).
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Button(
-                onClick = {
-                    if (!vps2Manager.trackingStarted) {
-                        val payloads = buildList {
-                            initialPayload?.let { if (it.isNotBlank()) add(it) }
-                            addAll(payloadOptions.values.filter { it.isNotBlank() })
-                        }.distinct()
-                        vps2Manager.startTracking(payloads)
-                    } else {
-                        vps2Manager.stopTracking()
+            // The band above the buttons shows one panel at a time. The debugger takes the whole
+            // band while it is open, then the mini-map, otherwise the anchor list and compass
+            // share it side by side. The map needs a localization to centre on, so it stays on
+            // the compass until one lands even when toggled on.
+            //
+            // Every branch is weighted with fill = false, so the buttons are measured first and
+            // the band can only ever use what is left over. That keeps the buttons on screen in
+            // landscape, where the whole overlay has little vertical room to begin with.
+            if (showDebuggerWebView) {
+                VpsDebuggerWebView(
+                    bridge = webBridge,
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp),
+                )
+            } else if (vps2Manager.trackingStarted && showMapView) {
+                val anchorDots = vps2Manager.anchorGeolocations.mapNotNull { (anchorKey, geo) ->
+                    val state = vps2Manager.anchorStates[anchorKey] ?: AnchorTrackingState.NOT_TRACKED
+                    if (state == AnchorTrackingState.NOT_TRACKED) return@mapNotNull null
+                    // Match the AR cube colors: orange while coarse (LIMITED), green once precise.
+                    val dotColor =
+                        if (state == AnchorTrackingState.LIMITED) VPS2ReservedColors.AnchorLimited
+                        else VPS2ReservedColors.AnchorTracked
+                    VPS2MapDot(geo.latitude, geo.longitude, dotColor)
+                }
+                VPS2MapView(
+                    userLatitude = vps2Manager.vps2Latitude,
+                    userLongitude = vps2Manager.vps2Longitude,
+                    headingDeg = vps2Manager.vps2HeadingDeg,
+                    placementEnabled = vps2Manager.localizationTrackingState == Vps2TrackingState.PRECISE,
+                    anchorDots = anchorDots,
+                    placedMarkers = vps2Manager.placedMarkers,
+                    onTapCoordinate = { lat, lng ->
+                        if (!vps2Manager.placeMarker(lat, lng)) {
+                            Toast.makeText(
+                                context,
+                                "Localize precisely (green) to place a marker",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                    },
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+            } else if (vps2Manager.trackingStarted && showCompassView) {
+                // The compass spans the band, with the anchor list stacked above it. The list is
+                // the weighted one, so the compass is measured first and the list takes whatever
+                // vertical room is left rather than pushing the compass out.
+                Column(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (vps2Manager.anchors.isNotEmpty()) {
+                        TrackedAnchorsPanel(
+                            vps2Manager,
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .fillMaxWidth(0.6f),
+                        )
                     }
-                },
-                modifier = Modifier.navigationBarsPadding().padding(bottom = 16.dp)
-            ) {
-                Text(if (vps2Manager.trackingStarted) "Stop Tracking" else "Start Tracking")
+                    VPS2CompassPanel(
+                        vps2Manager,
+                        redCompass,
+                        blueCompass,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
+
+            // VPS2 controls, as two rows of equal-width buttons rather than one centered stack: what
+            // is shown on screen, then what tracking does. A row with one button gives it the width.
+            val canClear = vps2Manager.createdAnchorCount > 0 || vps2Manager.placedMarkers.isNotEmpty()
+            // The site's other VPS assets: production only unless allAssets. They load after
+            // Start. A site started without an asset ID has no target asset, so the localized
+            // one is left out too.
+            val switchableAssets = vps2Manager.siteVpsAssets.filter {
+                it.id != vps2Manager.targetAssetId && it.id != vps2Manager.localizedAssetId
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // One selector for the whole band, rather than a toggle per panel: only one
+                    // panel can be on screen at a time, so the buttons they would need are all
+                    // mutually exclusive anyway.
+                    Box(modifier = Modifier.weight(1f)) {
+                        FilledTonalButton(
+                            onClick = { panelMenuExpanded = true },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("View: ${selectedPanel.label}", maxLines = 1)
+                        }
+                        DropdownMenu(
+                            expanded = panelMenuExpanded,
+                            onDismissRequest = { panelMenuExpanded = false },
+                        ) {
+                            VPS2Panel.entries.forEach { panel ->
+                                DropdownMenuItem(
+                                    text = { Text(panel.label) },
+                                    onClick = {
+                                        selectedPanel = panel
+                                        panelMenuExpanded = false
+                                    },
+                                    // Nothing feeds the compass or the map until tracking is
+                                    // running, and the map additionally has nothing to centre on
+                                    // until a localization actually lands. The debugger stays
+                                    // available so it can be opened before pressing Start.
+                                    enabled = when (panel) {
+                                        VPS2Panel.NONE, VPS2Panel.DEBUGGER -> true
+                                        VPS2Panel.COMPASS -> vps2Manager.trackingStarted
+                                        VPS2Panel.MAP ->
+                                            vps2Manager.trackingStarted && hasUserLocation
+                                    },
+                                )
+                            }
+                        }
+                    }
+                    // Only offered when the user has something of their own to clear.
+                    // Payload-tracked anchors don't count: clearAll() leaves them alone, since they
+                    // are the demo content rather than something the user added.
+                    if (canClear) {
+                        FilledTonalButton(
+                            onClick = { vps2Manager.clearAll() },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Clear", maxLines = 1)
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (vps2Manager.trackingStarted && switchableAssets.isNotEmpty()) {
+                        Box(modifier = Modifier.weight(1f)) {
+                            Button(
+                                onClick = { switchAssetMenuExpanded = true },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Switch Asset", maxLines = 1)
+                            }
+                            DropdownMenu(
+                                expanded = switchAssetMenuExpanded,
+                                onDismissRequest = { switchAssetMenuExpanded = false },
+                            ) {
+                                switchableAssets.forEach { asset ->
+                                    DropdownMenuItem(
+                                        text = { Text("${asset.name} · ${deploymentLabel(asset.deployment)}") },
+                                        onClick = {
+                                            switchAssetMenuExpanded = false
+                                            vps2Manager.switchAsset(asset.id)
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Button(
+                        onClick = {
+                            if (!vps2Manager.trackingStarted) {
+                                if (useNearbySites) {
+                                    vps2Manager.startTracking(
+                                        nearbySites = VPS2Manager.NearbySitesRequest(
+                                            latitude = nearbyLatitude,
+                                            longitude = nearbyLongitude,
+                                        )
+                                    )
+                                } else if (useSiteLocalization) {
+                                    vps2Manager.startTracking(siteId = siteIdInput, assetId = assetIdInput)
+                                } else {
+                                    vps2Manager.startTracking(
+                                        listOfNotNull(initialPayload?.takeIf { it.isNotBlank() })
+                                    )
+                                }
+                            } else {
+                                // The panel selection resets itself off trackingStarted.
+                                eventBuffer.clear()
+                                vps2Manager.stopTracking()
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(
+                            if (vps2Manager.trackingStarted) "Stop Tracking" else "Start Tracking",
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+/**
+ * Bottom-band panel listing the anchors VPS2 is currently tracking, each with its tracking state
+ * and, once known, its geolocation.
+ */
+@Composable
+private fun TrackedAnchorsPanel(
+    vps2Manager: VPS2Manager,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .heightIn(max = 300.dp)
+            .background(Color.Black.copy(alpha = 0.7f))
+            .padding(8.dp)
+    ) {
+        Text(
+            text = "Tracked Anchors (${vps2Manager.anchors.size}):",
+            color = Color.White,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        LazyColumn {
+            itemsIndexed(vps2Manager.anchors.keys.toList()) { index, anchorKey ->
+                val state = vps2Manager.anchorStates[anchorKey] ?: AnchorTrackingState.NOT_TRACKED
+                val anchorName = "Anchor ${index + 1}"
+                val stateColor = when (state) {
+                    AnchorTrackingState.TRACKED -> Color.Green
+                    AnchorTrackingState.LIMITED -> Color.Yellow
+                    AnchorTrackingState.NOT_TRACKED -> Color.Red
+                }
+                val geo: GeolocationData? = vps2Manager.anchorGeolocations[anchorKey]
+                Column(modifier = Modifier.padding(vertical = 2.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(stateColor)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "$anchorName - $state",
+                            color = Color.White,
+                            fontSize = 9.sp
+                        )
+                    }
+                    if (geo != null) {
+                        Text(
+                            text = String.format(
+                                Locale.US,
+                                "  %.5f, %.5f, %.1f°",
+                                geo.latitude,
+                                geo.longitude,
+                                geo.heading
+                            ),
+                            color = Color.LightGray,
+                            fontSize = 8.sp,
+                            modifier = Modifier.padding(start = 14.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Bottom-band panel showing the VPS2 and device positions, each with a compass rose oriented to
+ * its own heading. The two readouts sit side by side so the panel stays short enough to centre in
+ * the band rather than filling it.
+ */
+@Composable
+private fun VPS2CompassPanel(
+    vps2Manager: VPS2Manager,
+    redCompass: ImageBitmap?,
+    blueCompass: ImageBitmap?,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .background(Color.Black.copy(alpha = 0.7f))
+            .padding(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        CompassReadout(
+            label = "VPS2",
+            latitude = vps2Manager.vps2Latitude,
+            longitude = vps2Manager.vps2Longitude,
+            headingDeg = vps2Manager.vps2HeadingDeg,
+            rose = redCompass,
+            contentDescription = "VPS2 Compass",
+            modifier = Modifier.weight(1f),
+        )
+        CompassReadout(
+            label = "Device",
+            latitude = vps2Manager.gpsLatitude,
+            longitude = vps2Manager.gpsLongitude,
+            headingDeg = vps2Manager.deviceHeadingDeg,
+            rose = blueCompass,
+            contentDescription = "Device Compass",
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+/**
+ * A single compass rose, rotated to [headingDeg], above the position it is reporting. The readout
+ * is broken across lines because two of these share the width of the screen.
+ */
+@Composable
+private fun CompassReadout(
+    label: String,
+    latitude: Double,
+    longitude: Double,
+    headingDeg: Double,
+    rose: ImageBitmap?,
+    contentDescription: String,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = String.format(
+                Locale.US,
+                "%s\nLat: %.6f\nLng: %.6f\nHeading: %.1f",
+                label,
+                latitude,
+                longitude,
+                headingDeg,
+            ),
+            color = Color.White,
+            fontSize = 9.sp,
+        )
+
+        rose?.let {
+            Image(
+                bitmap = it,
+                contentDescription = contentDescription,
+                modifier = Modifier
+                    .size(90.dp)
+                    .rotate(-headingDeg.toFloat())
+            )
         }
     }
 }

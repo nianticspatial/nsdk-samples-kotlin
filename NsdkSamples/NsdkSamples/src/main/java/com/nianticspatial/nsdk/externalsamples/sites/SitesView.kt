@@ -3,11 +3,13 @@
 package com.nianticspatial.nsdk.externalsamples.sites
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -41,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -57,6 +60,7 @@ import com.nianticspatial.nsdk.externalsamples.vps2.VPS2Route
 import com.nianticspatial.nsdk.sites.AssetDeploymentType
 import com.nianticspatial.nsdk.sites.AssetInfo
 import com.nianticspatial.nsdk.sites.AssetPipelineJobStatus
+import com.nianticspatial.nsdk.sites.AssetScope
 import com.nianticspatial.nsdk.sites.OrganizationInfo
 import com.nianticspatial.nsdk.sites.SiteInfo
 import com.nianticspatial.nsdk.sites.UserInfo
@@ -99,6 +103,18 @@ fun SitesView(
     val navState by sitesManager::navState
     val filterText by sitesManager::filterText
 
+    // Hoisted here (not inside NearMePanel) so the entered coordinates survive the
+    // Loading -> NearMeResults transition, which unmounts NearMePanel during a search.
+    var nearMeLat by remember { mutableStateOf(DEFAULT_LAT.toString()) }
+    var nearMeLng by remember { mutableStateOf(DEFAULT_LNG.toString()) }
+    var nearMeRadius by remember { mutableStateOf(DEFAULT_RADIUS_METERS.toString()) }
+
+    // Shown on the mode screen when "Localize to Nearby Site Automatically" has no fix to work with.
+    var modeSelectionError by remember { mutableStateOf<String?>(null) }
+    // True while that mode is waiting on a location fix, which arrives on a callback.
+    var isLocating by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
     // Set Help contents
     DisposableEffect(Unit) {
         helpContentState.value = {
@@ -108,7 +124,11 @@ fun SitesView(
                     "TO USE:\n" +
                     "Choose 'Display Sites Near Me' to find VPS sites near a coordinate, or\n" +
                     "'Display Sites From Orgs' to browse your organization's sites.\n" +
-                    "Tapping a site starts VPS2 localization immediately.\n\n" +
+                    "Tapping a VPS asset starts VPS2 localization to it immediately. The " +
+                    "Production / All assets toggle picks whether non-production assets are " +
+                    "listed too.\n\n" +
+                    "'Localize to Nearby Site Automatically' skips selection entirely: it takes " +
+                    "your current location and localizes against every VPS site near it.\n\n" +
                     "You can filter items by name using the search field. ",
                 color = Color.White
             )
@@ -135,7 +155,33 @@ fun SitesView(
             is SitesNavState.ModeSelection -> {
                 ModeSelectionView(
                     onFromOrgsClick = { sitesManager.onStartFromOrgsFlow() },
-                    onNearMeClick = { sitesManager.onStartNearMeFlow() }
+                    onNearMeClick = { sitesManager.onStartNearMeFlow() },
+                    // Skips site selection entirely: get a fix, then hand it to VPS2, which asks the
+                    // SDK to localize against every VPS site near it. The fix is asynchronous in
+                    // live mode, so navigation happens from the callback.
+                    onLocalizeNearbyClick = {
+                        modeSelectionError = null
+                        isLocating = true
+                        requestDeviceLocation(
+                            context = context,
+                            getSdkGpsSample = { sdkGpsSample(nsdkSessionManager) },
+                            onError = {
+                                isLocating = false
+                                modeSelectionError = it
+                            },
+                        ) { location ->
+                            isLocating = false
+                            navHostController.navigate(
+                                VPS2Route(
+                                    useNearbySites = true,
+                                    latitude = location.lat,
+                                    longitude = location.lng,
+                                )
+                            )
+                        }
+                    },
+                    isLocating = isLocating,
+                    error = modeSelectionError,
                 )
             }
             is SitesNavState.Loading -> {
@@ -155,10 +201,7 @@ fun SitesView(
                     filterText = filterText,
                     onFilterChange = { sitesManager.onFilterChange(it) },
                     onOrganizationClick = { org ->
-                        val currentLocation = nsdkSessionManager.dataSource?.latestGpsSample()?.let {
-                            LatLng(it.latitude, it.longitude)
-                        }
-                        sitesManager.onOrganizationClick(org, currentLocation)
+                        sitesManager.onOrganizationClick(org, sdkGpsSample(nsdkSessionManager))
                     },
                     onBackClick = { sitesManager.onBackToModeSelection() },
                     modifier = Modifier.weight(1f)
@@ -171,8 +214,19 @@ fun SitesView(
                     currentLocation = sitesManager.currentLocation,
                     filterText = filterText,
                     onFilterChange = { sitesManager.onFilterChange(it) },
-                    onSiteClick = { anchorPayload ->
-                        navHostController.navigate(VPS2Route(anchorPayload))
+                    assetScope = sitesManager.assetScope,
+                    onAssetScopeChange = { sitesManager.onAssetScopeChange(it) },
+                    onSiteClick = { item ->
+                        navHostController.navigate(
+                            VPS2Route(
+                                siteId = item.site.id,
+                                vpsMapAssetId = item.asset.id,
+                                allAssets = sitesManager.assetScope == AssetScope.ALL,
+                                useSiteLocalization = true,
+                                latitude = if (item.site.hasLocation) item.site.latitude else 0.0,
+                                longitude = if (item.site.hasLocation) item.site.longitude else 0.0,
+                            )
+                        )
                     },
                     onBackClick = { sitesManager.onBackToUserView() },
                     modifier = Modifier.weight(1f)
@@ -184,15 +238,33 @@ fun SitesView(
                     warning = state.warning,
                     filterText = filterText,
                     onFilterChange = { sitesManager.onFilterChange(it) },
+                    latText = nearMeLat,
+                    onLatChange = { nearMeLat = it },
+                    lngText = nearMeLng,
+                    onLngChange = { nearMeLng = it },
+                    radiusText = nearMeRadius,
+                    onRadiusChange = { nearMeRadius = it },
+                    assetScope = sitesManager.assetScope,
+                    onAssetScopeChange = { sitesManager.onAssetScopeChange(it) },
                     onSearch = { lat, lng, radius ->
                         sitesManager.onFilterChange("")
-                        val currentLocation = nsdkSessionManager.dataSource?.latestGpsSample()?.let {
-                            LatLng(it.latitude, it.longitude)
-                        }
-                        sitesManager.onNearMeSearch(lat, lng, radius, currentLocation)
+                        sitesManager.onNearMeSearch(lat, lng, radius, sdkGpsSample(nsdkSessionManager))
                     },
-                    onSiteClick = { anchorPayload ->
-                        navHostController.navigate(VPS2Route(anchorPayload))
+                    isPlayback = nsdkSessionManager.arManager.isPlayback,
+                    getSdkGpsSample = { sdkGpsSample(nsdkSessionManager) },
+                    onSiteClick = { item ->
+                        // The asset picked, which may not be in production; the VPS2 screen can
+                        // switch to another asset of the site.
+                        navHostController.navigate(
+                            VPS2Route(
+                                siteId = item.site.id,
+                                vpsMapAssetId = item.asset.id,
+                                allAssets = sitesManager.assetScope == AssetScope.ALL,
+                                useSiteLocalization = true,
+                                latitude = if (item.site.hasLocation) item.site.latitude else 0.0,
+                                longitude = if (item.site.hasLocation) item.site.longitude else 0.0,
+                            )
+                        )
                     },
                     onBackClick = { sitesManager.onBackToModeSelection() },
                     modifier = Modifier.weight(1f)
@@ -238,10 +310,67 @@ private fun InfoBox(navState: SitesNavState) {
 // Mode Selection
 // ============================================================================
 
+/**
+ * Gets a device location, asynchronously.
+ *
+ * Prefers the active NSDK data source's GPS so playback returns the dataset's location instead of
+ * the live device fix. The SDK only samples GPS while its AR session is running, though, and this
+ * screen never starts one — so in live mode it falls back to a one-shot Fused request, which powers
+ * up location services and calls back when a fix lands.
+ */
+private fun requestDeviceLocation(
+    context: Context,
+    getSdkGpsSample: () -> LatLng?,
+    onError: (String) -> Unit,
+    onLocation: (LatLng) -> Unit,
+) {
+    val sdkLocation = getSdkGpsSample()
+    if (sdkLocation != null) {
+        onLocation(sdkLocation)
+        return
+    }
+
+    val hasPermission = ContextCompat.checkSelfPermission(
+        context, Manifest.permission.ACCESS_FINE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED
+    if (!hasPermission) {
+        onError("Location permission not granted. Please enable it in app settings.")
+        return
+    }
+
+    LocationServices.getFusedLocationProviderClient(context)
+        .getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
+        .addOnSuccessListener { location ->
+            if (location != null) {
+                onLocation(LatLng(location.latitude, location.longitude))
+            } else {
+                onError("Could not determine location. Please try again.")
+            }
+        }
+        .addOnFailureListener { e ->
+            onError("Failed to get location: ${e.message}")
+        }
+}
+
+/** The playback dataset's recorded location in playback, else the latest SDK GPS sample. */
+private fun sdkGpsSample(nsdkSessionManager: NSDKSessionManager): LatLng? {
+    val arManager = nsdkSessionManager.arManager
+    val recorded = arManager.playbackDataset?.takeIf { arManager.isPlayback }?.let { dataset ->
+        (0 until dataset.frameCount).firstNotNullOfOrNull {
+            dataset.getPlaybackFrameMetadataAtIndex(it).gpsLocation
+        }
+    }
+    if (recorded != null) return LatLng(recorded.latitude, recorded.longitude)
+    return nsdkSessionManager.dataSource?.latestGpsSample()?.let { LatLng(it.latitude, it.longitude) }
+}
+
 @Composable
 private fun ModeSelectionView(
     onFromOrgsClick: () -> Unit,
-    onNearMeClick: () -> Unit
+    onNearMeClick: () -> Unit,
+    onLocalizeNearbyClick: () -> Unit,
+    isLocating: Boolean,
+    error: String?,
 ) {
     Column(
         modifier = Modifier.fillMaxSize(),
@@ -270,6 +399,15 @@ private fun ModeSelectionView(
             onClick = onFromOrgsClick,
             color = Color(0xFF4A90D9)
         )
+        StyledButton(
+            text = if (isLocating) "📍  Getting your location…"
+                   else "📍  Localize to Nearby Site Automatically",
+            onClick = { if (!isLocating) onLocalizeNearbyClick() },
+            color = Color(0xFF7B4A9E)
+        )
+        if (error != null) {
+            ErrorText(message = error)
+        }
     }
 }
 
@@ -283,15 +421,22 @@ private fun NearMePanel(
     warning: String?,
     filterText: String,
     onFilterChange: (String) -> Unit,
+    latText: String,
+    onLatChange: (String) -> Unit,
+    lngText: String,
+    onLngChange: (String) -> Unit,
+    radiusText: String,
+    onRadiusChange: (String) -> Unit,
+    assetScope: AssetScope,
+    onAssetScopeChange: (AssetScope) -> Unit,
     onSearch: (lat: Double, lng: Double, radius: Double) -> Unit,
-    onSiteClick: (anchorPayload: String) -> Unit,
+    isPlayback: Boolean,
+    getSdkGpsSample: () -> LatLng?,
+    onSiteClick: (item: SiteWithVpsAsset) -> Unit,
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var latText by remember { mutableStateOf(DEFAULT_LAT.toString()) }
-    var lngText by remember { mutableStateOf(DEFAULT_LNG.toString()) }
-    var radiusText by remember { mutableStateOf(DEFAULT_RADIUS_METERS.toString()) }
     var locationError by remember { mutableStateOf<String?>(null) }
 
     val filteredSites = remember(sitesWithAssets, filterText) {
@@ -307,38 +452,28 @@ private fun NearMePanel(
     ) {
         BackButton(label = "← Back to Mode Selection", onClick = onBackClick)
 
-        CoordinateInputField(label = "Latitude", value = latText, onValueChange = { latText = it })
-        CoordinateInputField(label = "Longitude", value = lngText, onValueChange = { lngText = it })
-        CoordinateInputField(label = "Radius (meters)", value = radiusText, onValueChange = { radiusText = it })
+        CoordinateInputField(label = "Latitude", value = latText, onValueChange = onLatChange)
+        CoordinateInputField(label = "Longitude", value = lngText, onValueChange = onLngChange)
+        CoordinateInputField(label = "Radius (meters)", value = radiusText, onValueChange = onRadiusChange)
 
         StyledButton(
-            text = "📍 Use My Location",
+            text = if (isPlayback) "📍 Use Playback Location" else "📍 Use Device Location",
             onClick = {
                 locationError = null
-                val hasPermission = ContextCompat.checkSelfPermission(
-                    context, Manifest.permission.ACCESS_FINE_LOCATION
-                ) == PackageManager.PERMISSION_GRANTED
-                if (!hasPermission) {
-                    locationError = "Location permission not granted. Please enable it in app settings."
-                } else {
-                    LocationServices.getFusedLocationProviderClient(context)
-                        .getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
-                        .addOnSuccessListener { location ->
-                            if (location != null) {
-                                latText = String.format("%.6f", location.latitude)
-                                lngText = String.format("%.6f", location.longitude)
-                            } else {
-                                locationError = "Could not determine location. Please try again."
-                            }
-                        }
-                        .addOnFailureListener { e ->
-                            locationError = "Failed to get location: ${e.message}"
-                        }
+                requestDeviceLocation(
+                    context = context,
+                    getSdkGpsSample = getSdkGpsSample,
+                    onError = { locationError = it },
+                ) { location ->
+                    onLatChange(String.format("%.6f", location.lat))
+                    onLngChange(String.format("%.6f", location.lng))
                 }
             },
             color = Color(0xFF1565C0)
         )
         locationError?.let { ErrorText(it) }
+
+        AssetScopeToggle(scope = assetScope, onScopeChange = onAssetScopeChange)
 
         StyledButton(
             text = "Search Nearby Sites",
@@ -355,7 +490,7 @@ private fun NearMePanel(
 
         if (sitesWithAssets.isNotEmpty()) {
             Text(
-                text = "VPS Sites Near You (${sitesWithAssets.size}):",
+                text = "VPS Assets Near You (${sitesWithAssets.size}):",
                 color = Color.White,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 16.sp
@@ -366,11 +501,10 @@ private fun NearMePanel(
                 placeholder = "Filter sites..."
             )
             filteredSites.forEach { item ->
-                val payload = item.asset.vpsData?.anchorPayload
-                if (!payload.isNullOrBlank()) {
+                if (!item.asset.vpsData?.anchorPayload.isNullOrBlank()) {
                     StyledButton(
-                        text = item.site.name,
-                        onClick = { onSiteClick(payload) }
+                        text = assetLabel(item),
+                        onClick = { onSiteClick(item) }
                     )
                 }
             }
@@ -461,6 +595,11 @@ private fun formatAssetInfo(asset: AssetInfo): String {
         asset.pipelineJobId?.let { appendLine("Pipeline Job ID: $it") }
         if (asset.pipelineJobStatus != AssetPipelineJobStatus.UNSPECIFIED) {
             appendLine("Pipeline Status: ${asset.pipelineJobStatus}")
+        }
+        // Said only when the map is split. The typed data below describes areas[0] alone, so
+        // knowing there are others is what explains why it covers less than the whole asset.
+        if (asset.areas.size > 1) {
+            appendLine("Areas: ${asset.areas.size}")
         }
         // Typed asset data
         asset.meshData?.let { mesh ->
@@ -610,7 +749,9 @@ private fun SiteButtons(
     currentLocation: LatLng?,
     filterText: String,
     onFilterChange: (String) -> Unit,
-    onSiteClick: (anchorPayload: String) -> Unit,
+    assetScope: AssetScope,
+    onAssetScopeChange: (AssetScope) -> Unit,
+    onSiteClick: (item: SiteWithVpsAsset) -> Unit,
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -643,6 +784,8 @@ private fun SiteButtons(
     ) {
         BackButton(label = "← Back to Organizations", onClick = onBackClick)
 
+        AssetScopeToggle(scope = assetScope, onScopeChange = onAssetScopeChange)
+
         warning?.let { msg ->
             WarningText(msg)
             Spacer(modifier = Modifier.height(8.dp))
@@ -650,7 +793,7 @@ private fun SiteButtons(
 
         if (sitesWithAssets.isNotEmpty()) {
             Text(
-                text = "Select a Site (Localize):",
+                text = "Select a VPS Asset (Localize):",
                 color = Color.White,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 16.sp
@@ -664,12 +807,12 @@ private fun SiteButtons(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(filteredSitesWithAssets, key = { it.site.id }) { item ->
-                    val payload = item.asset.vpsData?.anchorPayload
-                    if (!payload.isNullOrBlank()) {
+                // One row per asset: a site can have several, in different deployments.
+                items(filteredSitesWithAssets, key = { it.asset.id }) { item ->
+                    if (!item.asset.vpsData?.anchorPayload.isNullOrBlank()) {
                         StyledButton(
-                            text = item.site.name,
-                            onClick = { onSiteClick(payload) }
+                            text = assetLabel(item),
+                            onClick = { onSiteClick(item) }
                         )
                     }
                 }
@@ -678,8 +821,47 @@ private fun SiteButtons(
     }
 }
 
+/**
+ * The site's name over the VPS asset's name and whether it is in production, with the asset's
+ * area count when the map is split.
+ *
+ * A scan too large for one mapping run is published as several areas, each with its own anchor
+ * and extent, and VPS2 localizes against whichever one the device is standing in. Only said above
+ * 1: one area is the ordinary case and would be noise on every row.
+ */
+private fun assetLabel(item: SiteWithVpsAsset): String {
+    val areaCount = item.asset.areas.size
+    val areas = if (areaCount > 1) " · $areaCount areas" else ""
+    return "${item.site.name}\n${item.asset.name} · ${deploymentLabel(item.asset.deployment)}$areas"
+}
+
+/**
+ * Production assets only, or every asset. The owner re-runs its list when this changes.
+ */
 @Composable
-private fun SearchFilterField(
+private fun AssetScopeToggle(scope: AssetScope, onScopeChange: (AssetScope) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        listOf(AssetScope.PRODUCTION to "Production", AssetScope.ALL to "All assets")
+            .forEach { (option, label) ->
+                Button(
+                    onClick = { onScopeChange(option) },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (option == scope) Color(0xFF4A90D9) else Color(0xFF2D2D44)
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(text = label, color = Color.White)
+                }
+            }
+    }
+}
+
+@Composable
+internal fun SearchFilterField(
     value: String,
     onValueChange: (String) -> Unit,
     placeholder: String
@@ -725,7 +907,8 @@ private fun StyledButton(
             text = text,
             color = Color.White,
             fontWeight = FontWeight.Medium,
-            fontSize = 16.sp
+            fontSize = 16.sp,
+            textAlign = TextAlign.Center
         )
     }
 }
@@ -738,5 +921,3 @@ private fun BackButton(label: String, onClick: () -> Unit) {
         color = Color(0xFF6B6B6B)
     )
 }
-
-

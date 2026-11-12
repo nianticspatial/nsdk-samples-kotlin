@@ -109,7 +109,9 @@ class SceneSegmentationOverlayContent(
             .height(height)
             .levels(1)
             .sampler(Texture.Sampler.SAMPLER_2D)
-            .format(Texture.InternalFormat.R32F)
+            // R16F, not R32F: R32F can't be linearly filtered without
+            // OES_texture_float_linear (missing on e.g. Samsung Xclipse) and samples as 0.
+            .format(Texture.InternalFormat.R16F)
             .build(engine)
 
         materialInstance.setParameter("confidenceTexture", texture!!, sampler)

@@ -94,9 +94,7 @@ class DepthOverlayContent(
 
         // Check if we have a new depth frame
         val currentTimestamp = depthBuffer.timestampMs
-        val needsTextureUpdate = currentTimestamp != lastDepthBufferTimestamp
-
-        if (needsTextureUpdate) {
+        if (currentTimestamp != lastDepthBufferTimestamp) {
             updateDepthTexture(engine, depthBuffer, materialInstance)
             lastDepthBufferTimestamp = currentTimestamp
         }
@@ -173,7 +171,9 @@ class DepthOverlayContent(
                     .width(width)
                     .height(height)
                     .sampler(Texture.Sampler.SAMPLER_2D)
-                    .format(Texture.InternalFormat.R32F)
+                    // R16F, not R32F: R32F can't be linearly filtered without
+                    // OES_texture_float_linear (missing on e.g. Samsung Xclipse) and samples as 0.
+                    .format(Texture.InternalFormat.R16F)
                     .levels(1)
                     .build(engine)
 
